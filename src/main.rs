@@ -27,7 +27,10 @@ use memory::heap::init_heap;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref PRINT_SEMAPHORE: Semaphore = Semaphore::new(1);
+    pub static ref PRINT_SEMAPHORE: Semaphore = {
+        let sem = Semaphore::new(1);
+        sem
+    };
 }
 
 /// This function is called on panic.
