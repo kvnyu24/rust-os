@@ -4,10 +4,9 @@ use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
     structures::paging::{
         FrameAllocator, PageTable, PhysFrame, Size4KiB,
-        OffsetPageTable, Page, PageTableFlags, PhysAddr, VirtAddr,
-        Mapper,
+        OffsetPageTable, Page, PageTableFlags, Mapper,
     },
-    VirtAddr,
+    VirtAddr, PhysAddr,
 };
 
 /// Initialize a new OffsetPageTable.
@@ -77,7 +76,7 @@ impl BootInfoFrameAllocator {
     }
 }
 
-impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
+unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;

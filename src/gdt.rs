@@ -2,6 +2,7 @@ use x86_64::VirtAddr;
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::structures::gdt::{GlobalDescriptorTable, Descriptor, SegmentSelector};
 use lazy_static::lazy_static;
+use static_assertions::const_assert;
 
 // Index for the double fault IST entry
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;

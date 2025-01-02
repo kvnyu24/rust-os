@@ -1,6 +1,6 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use lazy_static::lazy_static;
-use crate::println;
+use crate::{print, println};
 use crate::gdt;
 
 pub mod pic;

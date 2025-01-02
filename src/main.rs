@@ -3,6 +3,8 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 #![feature(asm_const)]
+#![feature(naked_functions)]
+#![feature(default_alloc_error_handler)]
 
 extern crate alloc;
 
@@ -11,12 +13,10 @@ mod gdt;
 mod interrupts;
 mod memory;
 
-use bootloader::{bootinfo::BootInfo, entry_point};
+use bootloader::BootInfo;
 use core::panic::PanicInfo;
 use x86_64::VirtAddr;
-use alloc::{boxed::Box, vec::Vec, rc::Rc};
-
-entry_point!(kernel_main);
+use alloc::{boxed::Box, vec, vec::Vec, rc::Rc};
 
 /// This function is called on panic.
 #[panic_handler]
@@ -25,12 +25,8 @@ fn panic(info: &PanicInfo) -> ! {
     interrupts::hlt_loop();
 }
 
-#[alloc_error_handler]
-fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
-    panic!("allocation error: {:?}", layout)
-}
-
-fn kernel_main(boot_info: &'static BootInfo) -> ! {
+#[no_mangle]
+pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     println!("Hello World!");
     println!("Welcome to RustOS!");
     println!("---------------");

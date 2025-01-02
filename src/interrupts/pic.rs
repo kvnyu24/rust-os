@@ -1,18 +1,16 @@
 use pic8259::ChainedPics;
 use spin::Mutex;
+use static_assertions::const_assert;
 
-// Standard offset for PIC1, after CPU exceptions (0-31)
 pub const PIC_1_OFFSET: u8 = 32;
-// PIC2 starts after PIC1's 8 interrupts
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
-// Ensure offsets don't overlap with CPU exceptions or each other
+// Ensure offsets are in valid ranges
 const_assert!(PIC_1_OFFSET >= 32);
-const_assert!(PIC_2_OFFSET >= PIC_1_OFFSET + 8);
-const_assert!(PIC_2_OFFSET + 8 <= 256);
+const_assert!(PIC_2_OFFSET >= 40);  // PIC_1_OFFSET + 8
+const_assert!(PIC_2_OFFSET <= 248); // 256 - 8
 
 pub static PICS: Mutex<ChainedPics> = Mutex::new(unsafe {
-    // Safety: The chosen interrupt offsets don't overlap with exceptions
     ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET)
 });
 
