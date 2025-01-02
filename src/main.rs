@@ -12,11 +12,13 @@ mod vga_buffer;
 mod gdt;
 mod interrupts;
 mod memory;
+mod keyboard;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
 use x86_64::VirtAddr;
 use alloc::{boxed::Box, vec, vec::Vec, rc::Rc};
+use futures_util::StreamExt;
 
 /// This function is called on panic.
 #[panic_handler]
@@ -53,30 +55,24 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
         .expect("heap initialization failed");
 
     println!("Memory management initialized!");
-    println!("Testing heap allocation...");
-
-    // Test the heap by allocating some values
-    let heap_value = Box::new(41);
-    println!("heap_value at {:p}", heap_value);
-
-    // Create a dynamically sized vector
-    let mut vec = Vec::new();
-    for i in 0..500 {
-        vec.push(i);
-    }
-    println!("vec at {:p}", vec.as_slice());
-
-    // Create a reference counted vector
-    let reference_counted = Rc::new(vec![1, 2, 3]);
-    let cloned_reference = reference_counted.clone();
-    println!("current reference count is {}", Rc::strong_count(&cloned_reference));
-    core::mem::drop(reference_counted);
-    println!("reference count is {} now", Rc::strong_count(&cloned_reference));
-
-    println!("Heap allocation test successful!");
-    println!("A bare metal operating system");
-    println!("written in Rust");
+    println!("Initializing keyboard...");
+    
+    // Initialize keyboard
+    keyboard::init();
+    
+    println!("Keyboard initialized successfully!");
     println!("You can now type on the keyboard!");
+    println!("Press any key to see it echoed back...");
 
-    interrupts::hlt_loop();
+    // Create a keyboard event stream
+    let mut keyboard_events = keyboard::KeyboardStream::new();
+    
+    loop {
+        if let Some(event) = futures_util::executor::block_on(keyboard_events.next()) {
+            match event {
+                keyboard::KeyEvent::Char(c) => print!("{}", c),
+                keyboard::KeyEvent::SpecialKey(key) => print!("{:?}", key),
+            }
+        }
+    }
 }

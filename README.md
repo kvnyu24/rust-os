@@ -12,10 +12,10 @@ This project is a minimal operating system implemented in Rust, running directly
 - [x] Basic VGA text buffer output
 - [x] Global Descriptor Table (GDT)
 - [x] Interrupt Descriptor Table (IDT)
-- [ ] Keyboard input handling
+- [x] Keyboard input handling
 - [ ] Memory management
   - [x] Physical memory management
-  - [ ] Virtual memory & paging
+  - [x] Virtual memory & paging
 - [x] Heap allocation
 - [ ] Multi-threading support
 - [ ] Basic filesystem
