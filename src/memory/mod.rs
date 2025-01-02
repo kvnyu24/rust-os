@@ -3,76 +3,117 @@ pub mod heap;
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
     structures::paging::{
-        FrameAllocator, PageTable, PhysFrame, Size4KiB,
-        OffsetPageTable, Page, PageTableFlags, Mapper,
+        PageTable, PageTableFlags, PhysFrame, Size4KiB, FrameAllocator,
+        Mapper, Page, RecursivePageTable, MappedPageTable,
     },
     VirtAddr, PhysAddr,
 };
+use spin::Mutex;
+use alloc::vec::Vec;
 
-/// Initialize a new OffsetPageTable.
-///
-/// This function is unsafe because the caller must guarantee that the
-/// complete physical memory is mapped to virtual memory at the passed
-/// `physical_memory_offset`. Also, this function must be only called once
-/// to avoid aliasing `&mut` references (which is undefined behavior).
-pub unsafe fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
-    let level_4_table = active_level_4_table(physical_memory_offset);
-    OffsetPageTable::new(level_4_table, physical_memory_offset)
+pub struct MemorySpace {
+    page_table: RecursivePageTable<'static>,
+    heap_start: VirtAddr,
+    heap_size: usize,
+    code_start: VirtAddr,
+    code_size: usize,
 }
 
-/// Returns a mutable reference to the active level 4 table.
-///
-/// This function is unsafe because the caller must guarantee that the
-/// complete physical memory is mapped to virtual memory at the passed
-/// `physical_memory_offset`. Also, this function must be only called once
-/// to avoid aliasing `&mut` references (which is undefined behavior).
-unsafe fn active_level_4_table(physical_memory_offset: VirtAddr)
-    -> &'static mut PageTable
-{
-    use x86_64::registers::control::Cr3;
+impl MemorySpace {
+    pub fn new() -> Result<Self, &'static str> {
+        let mut frame_allocator = unsafe { FRAME_ALLOCATOR.lock().as_mut().unwrap() };
+        
+        // Allocate a new page table
+        let page_table_frame = frame_allocator.allocate_frame()
+            .ok_or("Failed to allocate frame for page table")?;
+            
+        // Get the physical address of the page table
+        let phys_addr = page_table_frame.start_address();
+        
+        // Map it recursively
+        let recursive_index = 511;
+        let recursive_addr = VirtAddr::new(0xffff_ffff_ffff_f000);
+        
+        unsafe {
+            let page_table = &mut *(phys_addr.as_u64() as *mut PageTable);
+            page_table[recursive_index].set_frame(
+                page_table_frame.clone(),
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+            );
+            
+            // Create recursive page table
+            let page_table = RecursivePageTable::new(
+                &mut *(recursive_addr.as_mut_ptr() as *mut PageTable)
+            ).map_err(|_| "Failed to create recursive page table")?;
+            
+            Ok(Self {
+                page_table,
+                heap_start: VirtAddr::new(0x4000_0000_0000),
+                heap_size: 1024 * 1024, // 1MB heap
+                code_start: VirtAddr::new(0x0000_0000_0000),
+                code_size: 1024 * 1024, // 1MB code segment
+            })
+        }
+    }
 
-    let (level_4_table_frame, _) = Cr3::read();
+    pub fn load_program(&self, program: &[u8]) -> Result<(), &'static str> {
+        let mut frame_allocator = unsafe { FRAME_ALLOCATOR.lock().as_mut().unwrap() };
+        
+        // Map program pages
+        let pages = (program.len() + 4095) / 4096;
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+        
+        for i in 0..pages {
+            let page = Page::<Size4KiB>::containing_address(
+                self.code_start + i * 4096
+            );
+            
+            let frame = frame_allocator.allocate_frame()
+                .ok_or("Failed to allocate frame for program")?;
+                
+            unsafe {
+                self.page_table
+                    .map_to(page, frame, flags, &mut *frame_allocator)
+                    .map_err(|_| "Failed to map program page")?
+                    .flush();
+                    
+                // Copy program data
+                let start = i * 4096;
+                let end = core::cmp::min((i + 1) * 4096, program.len());
+                let dest = (self.code_start + i * 4096).as_mut_ptr();
+                dest.copy_from(program[start..end].as_ptr(), end - start);
+            }
+        }
+        
+        Ok(())
+    }
 
-    let phys = level_4_table_frame.start_address();
-    let virt = physical_memory_offset + phys.as_u64();
-    let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
-
-    &mut *page_table_ptr // unsafe
+    pub fn entry_point(&self) -> usize {
+        self.code_start.as_u64() as usize
+    }
 }
 
-/// A FrameAllocator that returns usable frames from the bootloader's memory map.
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
     next: usize,
 }
 
 impl BootInfoFrameAllocator {
-    /// Create a FrameAllocator from the passed memory map.
-    ///
-    /// This function is unsafe because the caller must guarantee that the passed
-    /// memory map is valid. The main requirement is that all frames that are marked
-    /// as `USABLE` in it are really unused.
     pub unsafe fn init(memory_map: &'static MemoryMap) -> Self {
         BootInfoFrameAllocator {
             memory_map,
             next: 0,
         }
     }
-
-    /// Returns an iterator over the usable frames specified in the memory map.
+    
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        // get usable regions from memory map
         let regions = self.memory_map.iter();
         let usable_regions = regions
             .filter(|r| r.region_type == MemoryRegionType::Usable);
-        // map each region to its address range
         let addr_ranges = usable_regions
             .map(|r| r.range.start_addr()..r.range.end_addr());
-        // transform to an iterator of frame start addresses
         let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
-        // create `PhysFrame` types from the start addresses
-        frame_addresses
-            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+        frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
     }
 }
 
@@ -84,28 +125,26 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     }
 }
 
-/// Creates an example mapping for the given page to frame `0xb8000`.
-pub fn create_example_mapping(
-    page: Page,
-    mapper: &mut OffsetPageTable,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) {
-    use x86_64::structures::paging::PageTableFlags as Flags;
-
-    let frame = PhysFrame::containing_address(PhysAddr::new(0xb8000));
-    let flags = Flags::PRESENT | Flags::WRITABLE;
-
-    let map_to_result = unsafe {
-        mapper.map_to(page, frame, flags, frame_allocator)
-    };
-    map_to_result.expect("map_to failed").flush();
+lazy_static::lazy_static! {
+    static ref FRAME_ALLOCATOR: Mutex<Option<BootInfoFrameAllocator>> =
+        Mutex::new(None);
 }
 
-/// Initialize the heap allocator.
-pub fn init_heap(
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), &'static str> {
-    heap::init_heap(mapper, frame_allocator)
-        .map_err(|_| "heap initialization failed")
+pub fn init(physical_memory_offset: VirtAddr) -> MappedPageTable<'static, BootInfoFrameAllocator> {
+    let level_4_table = unsafe { active_level_4_table(physical_memory_offset) };
+    unsafe { MappedPageTable::new(level_4_table, physical_memory_offset) }
+}
+
+unsafe fn active_level_4_table(physical_memory_offset: VirtAddr)
+    -> &'static mut PageTable
+{
+    use x86_64::registers::control::Cr3;
+
+    let (level_4_table_frame, _) = Cr3::read();
+
+    let phys = level_4_table_frame.start_address();
+    let virt = physical_memory_offset + phys.as_u64();
+    let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
+
+    &mut *page_table_ptr
 }

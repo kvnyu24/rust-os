@@ -14,11 +14,13 @@ mod interrupts;
 mod memory;
 mod keyboard;
 mod task;
+mod fs;
+mod process;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
 use x86_64::VirtAddr;
-use alloc::{boxed::Box, vec, vec::Vec, rc::Rc};
+use alloc::{boxed::Box, vec, vec::Vec, rc::Rc, string::String};
 use futures_util::StreamExt;
 
 /// This function is called on panic.
@@ -74,6 +76,18 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
         .expect("heap initialization failed");
 
     println!("Memory management initialized!");
+    println!("Initializing filesystem...");
+    
+    // Initialize filesystem
+    fs::init();
+    
+    println!("Filesystem initialized successfully!");
+    println!("Initializing process manager...");
+    
+    // Initialize process manager
+    process::init();
+    
+    println!("Process manager initialized successfully!");
     println!("Initializing keyboard...");
     
     // Initialize keyboard
@@ -85,12 +99,36 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     // Initialize task scheduler
     task::init();
     
+    // Create some test files and directories
+    let _ = fs::ROOT_FS.read().create_dir("/bin");
+    let _ = fs::ROOT_FS.read().create_dir("/home");
+    let _ = fs::ROOT_FS.read().create_file("/home/welcome.txt", b"Welcome to RustOS!\n".to_vec());
+    
     // Spawn test tasks
     task::spawn(task1);
     task::spawn(task2);
     
-    println!("Tasks spawned successfully!");
-    println!("Starting scheduler...");
+    // Create a test user process
+    let test_program = b"\
+        mov rax, 1      // write syscall
+        mov rdi, 1      // stdout
+        mov rsi, msg    // message
+        mov rdx, 14     // length
+        int 0x80        // syscall
+        mov rax, 0      // exit syscall
+        int 0x80        // syscall
+        msg: db 'Hello, World!',0xa
+    ".to_vec();
+    
+    if let Ok(pid) = process::PROCESS_MANAGER.write().spawn(
+        String::from("test_process"),
+        test_program,
+    ) {
+        println!("Spawned test process with PID: {}", pid);
+    }
+    
+    println!("System initialization complete!");
+    println!("Starting main loop...");
 
     // Create a keyboard event stream
     let mut keyboard_events = keyboard::KeyboardStream::new();
