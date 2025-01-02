@@ -13,7 +13,7 @@ This project is a minimal operating system implemented in Rust, running directly
 - [x] Global Descriptor Table (GDT)
 - [x] Interrupt Descriptor Table (IDT)
 - [x] Keyboard input handling
-- [ ] Memory management
+- [x] Memory management
   - [x] Physical memory management
   - [x] Virtual memory & paging
 - [x] Heap allocation

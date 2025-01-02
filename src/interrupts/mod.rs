@@ -85,10 +85,15 @@ extern "x86-interrupt" fn invalid_opcode_handler(
 extern "x86-interrupt" fn timer_interrupt_handler(
     _stack_frame: InterruptStackFrame)
 {
+    use crate::task;
+    
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(pic::InterruptIndex::Timer.as_u8());
     }
+    
+    // Perform task switching
+    task::yield_now();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(

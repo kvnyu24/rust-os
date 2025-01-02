@@ -13,6 +13,7 @@ mod gdt;
 mod interrupts;
 mod memory;
 mod keyboard;
+mod task;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
@@ -25,6 +26,24 @@ use futures_util::StreamExt;
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
     interrupts::hlt_loop();
+}
+
+fn task1() {
+    let mut i = 0;
+    loop {
+        println!("Task 1: {}", i);
+        i += 1;
+        for _ in 0..1000000 { core::hint::spin_loop(); }
+    }
+}
+
+fn task2() {
+    let mut i = 0;
+    loop {
+        println!("Task 2: {}", i);
+        i += 1;
+        for _ in 0..1000000 { core::hint::spin_loop(); }
+    }
 }
 
 #[no_mangle]
@@ -61,8 +80,17 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     keyboard::init();
     
     println!("Keyboard initialized successfully!");
-    println!("You can now type on the keyboard!");
-    println!("Press any key to see it echoed back...");
+    println!("Initializing task scheduler...");
+    
+    // Initialize task scheduler
+    task::init();
+    
+    // Spawn test tasks
+    task::spawn(task1);
+    task::spawn(task2);
+    
+    println!("Tasks spawned successfully!");
+    println!("Starting scheduler...");
 
     // Create a keyboard event stream
     let mut keyboard_events = keyboard::KeyboardStream::new();
@@ -74,5 +102,6 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                 keyboard::KeyEvent::SpecialKey(key) => print!("{:?}", key),
             }
         }
+        task::yield_now();
     }
 }
