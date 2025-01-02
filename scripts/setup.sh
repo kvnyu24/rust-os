@@ -19,12 +19,16 @@ fi
 
 # Install required components and tools
 echo -e "${BLUE}Installing required components...${NC}"
-rustup override set nightly
-rustup component add rust-src
-rustup component add llvm-tools-preview
+rustup override set nightly-2023-06-25
+rustup component add rust-src --toolchain nightly-2023-06-25
+rustup component add llvm-tools-preview --toolchain nightly-2023-06-25
 
-# Install cargo-bootimage
-echo -e "${BLUE}Installing cargo-bootimage...${NC}"
+# Clean any previous builds
+echo -e "${BLUE}Cleaning previous builds...${NC}"
+cargo clean
+
+# Install bootimage
+echo -e "${BLUE}Installing bootimage...${NC}"
 cargo install bootimage --version 0.10.3
 
 # Check if QEMU is installed
