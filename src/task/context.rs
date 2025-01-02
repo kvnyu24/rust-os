@@ -70,14 +70,16 @@ unsafe extern "C" fn switch_context_inner(_current: *mut TaskContext, _next: *mu
 }
 
 pub unsafe fn switch_context() {
-    use super::SCHEDULER;
     use x86_64::instructions::interrupts;
 
     interrupts::without_interrupts(|| {
-        if let Some(next_task) = SCHEDULER.lock().schedule() {
+        let mut guard = SCHEDULER.lock();
+        if let Some(next_task) = guard.schedule() {
             let mut next = next_task.write();
-            let mut current = SCHEDULER.lock().current.as_ref().unwrap().write();
-            current.context.switch(&mut next.context);
+            if let Some(current_task) = guard.current.as_ref() {
+                let mut current = current_task.write();
+                current.context.switch(&mut next.context);
+            }
         }
     });
 } 

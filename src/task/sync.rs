@@ -12,7 +12,7 @@ impl Semaphore {
     pub const fn new(initial: usize) -> Self {
         Self {
             count: AtomicUsize::new(initial),
-            waiters: SpinMutex::new(VecDeque::with_capacity(0)),
+            waiters: SpinMutex::new(VecDeque::new()),
         }
     }
 
@@ -53,7 +53,7 @@ pub struct BlockingMutex<T> {
 }
 
 impl<T> BlockingMutex<T> {
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self {
             inner: SpinMutex::new(value),
             waiters: SpinMutex::new(VecDeque::new()),

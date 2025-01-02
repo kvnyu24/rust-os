@@ -4,7 +4,8 @@ use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
     structures::paging::{
         PageTable, PageTableFlags, PhysFrame, Size4KiB, FrameAllocator,
-        Mapper, Page, RecursivePageTable, OffsetPageTable, MapToError,
+        Mapper, Page, RecursivePageTable, OffsetPageTable,
+        mapper::MapToError,
     },
     VirtAddr, PhysAddr,
 };
@@ -24,7 +25,8 @@ pub struct MemorySpace {
 
 impl MemorySpace {
     pub fn new() -> Result<Self, &'static str> {
-        let mut frame_allocator = unsafe { FRAME_ALLOCATOR.lock().as_mut().unwrap() };
+        let mut guard = FRAME_ALLOCATOR.lock();
+        let frame_allocator = guard.as_mut().unwrap();
         
         // Allocate a new page table
         let page_table_frame = frame_allocator.allocate_frame()
@@ -64,7 +66,7 @@ impl MemorySpace {
         let frame_allocator = guard.as_mut().unwrap();
         
         let num_pages = (program.len() + PAGE_SIZE - 1) / PAGE_SIZE;
-        let start_page = unsafe { VirtAddr::new(PROGRAM_BASE).as_mut_ptr::<u8>() };
+        let start_page = VirtAddr::new(PROGRAM_BASE).as_mut_ptr::<u8>();
 
         for i in 0..num_pages {
             let page = unsafe { Page::containing_address(VirtAddr::from_ptr(start_page.add(i * PAGE_SIZE))) };
