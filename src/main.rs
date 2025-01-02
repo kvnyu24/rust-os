@@ -11,10 +11,12 @@ mod gdt;
 mod interrupts;
 mod memory;
 
-use bootloader::BootInfo;
+use bootloader::{bootinfo::BootInfo, entry_point};
 use core::panic::PanicInfo;
 use x86_64::VirtAddr;
 use alloc::{boxed::Box, vec::Vec, rc::Rc};
+
+entry_point!(kernel_main);
 
 /// This function is called on panic.
 #[panic_handler]
@@ -28,8 +30,7 @@ fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("allocation error: {:?}", layout)
 }
 
-#[no_mangle]
-pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
+fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("Hello World!");
     println!("Welcome to RustOS!");
     println!("---------------");
