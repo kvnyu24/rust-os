@@ -24,6 +24,11 @@ use task::sync::Semaphore;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::{StreamExt, FutureExt};
 use memory::heap::init_heap;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref PRINT_SEMAPHORE: Semaphore = Semaphore::new(1);
+}
 
 /// This function is called on panic.
 #[panic_handler]
@@ -34,7 +39,6 @@ fn panic(info: &PanicInfo) -> ! {
 
 // Shared counter for testing synchronization
 static SHARED_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static PRINT_SEMAPHORE: Semaphore = Semaphore::new(1);
 
 fn high_priority_task() {
     let mut local_counter = 0;

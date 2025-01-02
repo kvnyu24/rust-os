@@ -9,7 +9,7 @@ pub struct Semaphore {
 }
 
 impl Semaphore {
-    pub const fn new(initial: usize) -> Self {
+    pub fn new(initial: usize) -> Self {
         Self {
             count: AtomicUsize::new(initial),
             waiters: SpinMutex::new(VecDeque::new()),
@@ -53,7 +53,7 @@ pub struct BlockingMutex<T> {
 }
 
 impl<T> BlockingMutex<T> {
-    pub const fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         Self {
             inner: SpinMutex::new(value),
             waiters: SpinMutex::new(VecDeque::new()),
@@ -93,7 +93,7 @@ pub struct Condvar {
 }
 
 impl Condvar {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             waiters: SpinMutex::new(VecDeque::new()),
         }
@@ -174,4 +174,4 @@ impl<T> RwLock<T> {
             }
         }
     }
-} 
+}
