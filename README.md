@@ -10,13 +10,13 @@ This project is a minimal operating system implemented in Rust, running directly
 
 - [x] Bare metal environment setup
 - [x] Basic VGA text buffer output
-- [ ] Global Descriptor Table (GDT)
-- [ ] Interrupt Descriptor Table (IDT)
+- [x] Global Descriptor Table (GDT)
+- [x] Interrupt Descriptor Table (IDT)
 - [ ] Keyboard input handling
 - [ ] Memory management
-  - [ ] Physical memory management
+  - [x] Physical memory management
   - [ ] Virtual memory & paging
-- [ ] Heap allocation
+- [x] Heap allocation
 - [ ] Multi-threading support
 - [ ] Basic filesystem
 - [ ] User space programs
@@ -49,22 +49,26 @@ rust-os/
 ## Building
 
 1. Install required tools:
+
 ```bash
 rustup component add rust-src
 cargo install cargo-xbuild bootimage
 ```
 
 2. Build the kernel:
+
 ```bash
 cargo build
 ```
 
 3. Create bootable disk image:
+
 ```bash
 cargo bootimage
 ```
 
 4. Run in QEMU:
+
 ```bash
 qemu-system-x86_64 -drive format=raw,file=target/x86_64-rust_os/debug/bootimage-rust-os.bin
 ```
