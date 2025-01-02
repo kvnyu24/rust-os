@@ -7,10 +7,11 @@ mod gdt;
 
 use core::panic::PanicInfo;
 
+/// This function is called on panic.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
-    loop {}
+    hlt_loop();
 }
 
 #[no_mangle]
@@ -26,5 +27,11 @@ pub extern "C" fn _start() -> ! {
     println!("A bare metal operating system");
     println!("written in Rust");
 
-    loop {}
+    hlt_loop();
+}
+
+pub fn hlt_loop() -> ! {
+    loop {
+        x86_64::instructions::hlt();
+    }
 }

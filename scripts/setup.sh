@@ -25,7 +25,7 @@ rustup component add llvm-tools-preview
 
 # Install cargo-bootimage
 echo -e "${BLUE}Installing cargo-bootimage...${NC}"
-cargo install cargo-bootimage
+cargo install bootimage --version 0.10.3
 
 # Check if QEMU is installed
 if ! command -v qemu-system-x86_64 &> /dev/null; then
@@ -51,4 +51,4 @@ echo -e "${BLUE}Creating bootable image...${NC}"
 cargo bootimage
 
 echo -e "${GREEN}Setup complete!${NC}"
-echo -e "${BLUE}To run RustOS, execute: ./run.sh${NC}" 
+echo -e "${BLUE}To run RustOS, execute: ./scripts/run.sh${NC}" 
