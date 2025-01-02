@@ -22,6 +22,8 @@ use core::panic::PanicInfo;
 use x86_64::VirtAddr;
 use alloc::{boxed::Box, vec, vec::Vec, rc::Rc, string::String};
 use futures_util::StreamExt;
+use task::sync::{Mutex, Semaphore};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// This function is called on panic.
 #[panic_handler]
@@ -30,21 +32,61 @@ fn panic(info: &PanicInfo) -> ! {
     interrupts::hlt_loop();
 }
 
-fn task1() {
-    let mut i = 0;
+// Shared counter for testing synchronization
+static SHARED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static PRINT_SEMAPHORE: Semaphore = Semaphore::new(1);
+
+fn high_priority_task() {
+    let mut local_counter = 0;
     loop {
-        println!("Task 1: {}", i);
-        i += 1;
-        for _ in 0..1000000 { core::hint::spin_loop(); }
+        PRINT_SEMAPHORE.acquire();
+        println!("High Priority Task: {}", local_counter);
+        PRINT_SEMAPHORE.release();
+        
+        SHARED_COUNTER.fetch_add(1, Ordering::SeqCst);
+        local_counter += 1;
+        
+        if local_counter > 5 {
+            break;
+        }
+        
+        for _ in 0..100000 { core::hint::spin_loop(); }
     }
 }
 
-fn task2() {
-    let mut i = 0;
+fn normal_priority_task() {
+    let mut local_counter = 0;
     loop {
-        println!("Task 2: {}", i);
-        i += 1;
-        for _ in 0..1000000 { core::hint::spin_loop(); }
+        PRINT_SEMAPHORE.acquire();
+        println!("Normal Priority Task: {}", local_counter);
+        PRINT_SEMAPHORE.release();
+        
+        SHARED_COUNTER.fetch_add(1, Ordering::SeqCst);
+        local_counter += 1;
+        
+        if local_counter > 5 {
+            break;
+        }
+        
+        for _ in 0..100000 { core::hint::spin_loop(); }
+    }
+}
+
+fn low_priority_task() {
+    let mut local_counter = 0;
+    loop {
+        PRINT_SEMAPHORE.acquire();
+        println!("Low Priority Task: {}", local_counter);
+        PRINT_SEMAPHORE.release();
+        
+        SHARED_COUNTER.fetch_add(1, Ordering::SeqCst);
+        local_counter += 1;
+        
+        if local_counter > 5 {
+            break;
+        }
+        
+        for _ in 0..100000 { core::hint::spin_loop(); }
     }
 }
 
@@ -104,31 +146,13 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     let _ = fs::ROOT_FS.read().create_dir("/home");
     let _ = fs::ROOT_FS.read().create_file("/home/welcome.txt", b"Welcome to RustOS!\n".to_vec());
     
-    // Spawn test tasks
-    task::spawn(task1);
-    task::spawn(task2);
+    // Spawn test tasks with different priorities
+    task::spawn_with_priority(high_priority_task, task::TaskPriority::High);
+    task::spawn_with_priority(normal_priority_task, task::TaskPriority::Normal);
+    task::spawn_with_priority(low_priority_task, task::TaskPriority::Low);
     
-    // Create a test user process
-    let test_program = b"\
-        mov rax, 1      // write syscall
-        mov rdi, 1      // stdout
-        mov rsi, msg    // message
-        mov rdx, 14     // length
-        int 0x80        // syscall
-        mov rax, 0      // exit syscall
-        int 0x80        // syscall
-        msg: db 'Hello, World!',0xa
-    ".to_vec();
-    
-    if let Ok(pid) = process::PROCESS_MANAGER.write().spawn(
-        String::from("test_process"),
-        test_program,
-    ) {
-        println!("Spawned test process with PID: {}", pid);
-    }
-    
-    println!("System initialization complete!");
-    println!("Starting main loop...");
+    println!("Test tasks spawned successfully!");
+    println!("Starting scheduler...");
 
     // Create a keyboard event stream
     let mut keyboard_events = keyboard::KeyboardStream::new();

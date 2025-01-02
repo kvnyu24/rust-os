@@ -92,8 +92,12 @@ extern "x86-interrupt" fn timer_interrupt_handler(
             .notify_end_of_interrupt(pic::InterruptIndex::Timer.as_u8());
     }
     
-    // Perform task switching
-    task::yield_now();
+    // Perform task switching if time slice is expired
+    let mut scheduler = task::SCHEDULER.lock();
+    if let Some(current) = scheduler.schedule() {
+        drop(scheduler); // Release the lock before yielding
+        task::yield_now();
+    }
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(

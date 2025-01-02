@@ -41,7 +41,9 @@ impl Process {
 
         // Create a new task for the process
         let entry_point = memory_space.entry_point();
-        let task = Arc::new(RwLock::new(task::Task::new(entry_point as fn())));
+        let task = Arc::new(RwLock::new(task::Task::new(unsafe {
+            core::mem::transmute::<usize, fn()>(entry_point)
+        })));
 
         Ok(Self {
             id: pid,
