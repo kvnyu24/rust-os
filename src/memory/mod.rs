@@ -4,13 +4,16 @@ use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
     structures::paging::{
         PageTable, PageTableFlags, PhysFrame, Size4KiB, FrameAllocator,
-        Mapper, Page, RecursivePageTable, MappedPageTable,
+        Mapper, Page, RecursivePageTable, OffsetPageTable, MapToError,
     },
     VirtAddr, PhysAddr,
 };
 use spin::Mutex;
-use alloc::vec::Vec;
 
+const PAGE_SIZE: usize = 4096;
+const PROGRAM_BASE: u64 = 0x400000;
+
+#[derive(Debug)]
 pub struct MemorySpace {
     page_table: RecursivePageTable<'static>,
     heap_start: VirtAddr,
@@ -56,35 +59,35 @@ impl MemorySpace {
         }
     }
 
-    pub fn load_program(&self, program: &[u8]) -> Result<(), &'static str> {
-        let mut frame_allocator = unsafe { FRAME_ALLOCATOR.lock().as_mut().unwrap() };
+    pub fn load_program(&mut self, program: &[u8]) -> Result<(), &'static str> {
+        let mut guard = FRAME_ALLOCATOR.lock();
+        let frame_allocator = guard.as_mut().unwrap();
         
-        // Map program pages
-        let pages = (program.len() + 4095) / 4096;
-        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-        
-        for i in 0..pages {
-            let page = Page::<Size4KiB>::containing_address(
-                self.code_start + i * 4096
-            );
-            
+        let num_pages = (program.len() + PAGE_SIZE - 1) / PAGE_SIZE;
+        let start_page = unsafe { VirtAddr::new(PROGRAM_BASE).as_mut_ptr::<u8>() };
+
+        for i in 0..num_pages {
+            let page = unsafe { Page::containing_address(VirtAddr::from_ptr(start_page.add(i * PAGE_SIZE))) };
             let frame = frame_allocator.allocate_frame()
                 .ok_or("Failed to allocate frame for program")?;
-                
+            let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+            
             unsafe {
                 self.page_table
-                    .map_to(page, frame, flags, &mut *frame_allocator)
-                    .map_err(|_| "Failed to map program page")?
+                    .map_to(page, frame, flags, frame_allocator)
+                    .map_err(|_| "Failed to map page")?
                     .flush();
-                    
-                // Copy program data
-                let start = i * 4096;
-                let end = core::cmp::min((i + 1) * 4096, program.len());
-                let dest = (self.code_start + i * 4096).as_mut_ptr();
-                dest.copy_from(program[start..end].as_ptr(), end - start);
+
+                let start = i * PAGE_SIZE;
+                let end = core::cmp::min((i + 1) * PAGE_SIZE, program.len());
+                let dest = frame.start_address().as_u64() as *mut u8;
+                core::ptr::copy_nonoverlapping(
+                    program[start..end].as_ptr(),
+                    dest,
+                    end - start
+                );
             }
         }
-        
         Ok(())
     }
 
@@ -130,9 +133,9 @@ lazy_static::lazy_static! {
         Mutex::new(None);
 }
 
-pub fn init(physical_memory_offset: VirtAddr) -> MappedPageTable<'static, BootInfoFrameAllocator> {
+pub fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
     let level_4_table = unsafe { active_level_4_table(physical_memory_offset) };
-    unsafe { MappedPageTable::new(level_4_table, physical_memory_offset) }
+    unsafe { OffsetPageTable::new(level_4_table, physical_memory_offset) }
 }
 
 unsafe fn active_level_4_table(physical_memory_offset: VirtAddr)

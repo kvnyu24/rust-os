@@ -20,10 +20,10 @@ mod process;
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
 use x86_64::VirtAddr;
-use alloc::{boxed::Box, vec, vec::Vec, rc::Rc, string::String};
-use futures_util::StreamExt;
-use task::sync::{Mutex, Semaphore};
+use task::sync::Semaphore;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use futures_util::{StreamExt, FutureExt};
+use memory::heap::init_heap;
 
 /// This function is called on panic.
 #[panic_handler]
@@ -114,7 +114,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     };
 
     // Initialize heap
-    memory::init_heap(&mut mapper, &mut frame_allocator)
+    init_heap(&mut mapper, &mut frame_allocator)
         .expect("heap initialization failed");
 
     println!("Memory management initialized!");
@@ -158,7 +158,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     let mut keyboard_events = keyboard::KeyboardStream::new();
     
     loop {
-        if let Some(event) = futures_util::executor::block_on(keyboard_events.next()) {
+        if let Some(event) = keyboard_events.next().now_or_never().flatten() {
             match event {
                 keyboard::KeyEvent::Char(c) => print!("{}", c),
                 keyboard::KeyEvent::SpecialKey(key) => print!("{:?}", key),

@@ -1,8 +1,7 @@
 use alloc::{string::String, vec::Vec, sync::Arc};
 use spin::RwLock;
-use x86_64::VirtAddr;
 use lazy_static::lazy_static;
-use crate::{memory, task};
+use crate::{memory, task, println};
 
 pub mod syscall;
 
@@ -34,7 +33,7 @@ impl Process {
         };
 
         // Create a new memory space for the process
-        let memory_space = memory::MemorySpace::new()?;
+        let mut memory_space = memory::MemorySpace::new()?;
         
         // Load the program into memory
         memory_space.load_program(&program)?;

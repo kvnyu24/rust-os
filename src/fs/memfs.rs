@@ -1,6 +1,9 @@
-use super::{Directory, File, FileStats, FileType, Filesystem, FsError, Result};
-use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
+use alloc::string::{String, ToString};
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use spin::RwLock;
+use crate::fs::{Directory, File, FileStats, FileType, FsError, Filesystem, Result};
 
 pub struct MemFs {
     root: Arc<MemDir>,
@@ -32,7 +35,7 @@ impl MemFs {
             if component.is_empty() {
                 continue;
             }
-            current_dir = current_dir.get_dir(component)?;
+            current_dir = current_dir.get_dir_as_memdir(component)?;
         }
 
         Ok((current_dir, file_name))
@@ -121,9 +124,18 @@ enum Entry {
 }
 
 impl MemDir {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             entries: RwLock::new(BTreeMap::new()),
+        }
+    }
+
+    fn get_dir_as_memdir(&self, name: &str) -> Result<Arc<MemDir>> {
+        let entries = self.entries.read();
+        match entries.get(name) {
+            Some(Entry::Directory(dir)) => Ok(Arc::clone(dir)),
+            Some(_) => Err(FsError::NotADirectory),
+            None => Err(FsError::NotFound),
         }
     }
 }
@@ -154,12 +166,8 @@ impl Directory for MemDir {
     }
 
     fn get_dir(&self, name: &str) -> Result<Arc<dyn Directory>> {
-        let entries = self.entries.read();
-        match entries.get(name) {
-            Some(Entry::Directory(dir)) => Ok(Arc::clone(dir) as Arc<dyn Directory>),
-            Some(_) => Err(FsError::NotADirectory),
-            None => Err(FsError::NotFound),
-        }
+        let dir = self.get_dir_as_memdir(name)?;
+        Ok(dir as Arc<dyn Directory>)
     }
 
     fn create_file(&self, name: &str, data: Vec<u8>) -> Result<()> {

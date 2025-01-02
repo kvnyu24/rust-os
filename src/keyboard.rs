@@ -1,10 +1,10 @@
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, KeyCode, KeyState, ScancodeSet1};
-use crate::vga_buffer;
+use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, KeyCode, ScancodeSet1};
 use conquer_once::spin::OnceCell;
 use crossbeam_queue::ArrayQueue;
 use core::{pin::Pin, task::{Context, Poll}};
 use futures_util::stream::Stream;
 use futures_util::task::AtomicWaker;
+use crate::println;
 
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 static WAKER: AtomicWaker = AtomicWaker::new();
@@ -34,26 +34,20 @@ impl Stream for KeyboardStream {
     type Item = KeyEvent;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let queue = SCANCODE_QUEUE.get().expect("scancode queue not initialized");
+        let queue = SCANCODE_QUEUE.get().expect("not initialized");
         
-        // Fast path for empty queue
-        if let Ok(scancode) = queue.pop() {
-            return match process_scancode(scancode) {
-                Some(event) => Poll::Ready(Some(event)),
-                None => Poll::Ready(None),
-            };
-        }
-
         WAKER.register(cx.waker());
         match queue.pop() {
-            Ok(scancode) => {
-                WAKER.take();
-                match process_scancode(scancode) {
-                    Some(event) => Poll::Ready(Some(event)),
-                    None => Poll::Ready(None),
+            Some(scancode) => {
+                let mut keyboard = Keyboard::new(layouts::Us104Key, ScancodeSet1, HandleControl::Ignore);
+                if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+                    if let Some(key) = decode_key(key_event) {
+                        return Poll::Ready(Some(key));
+                    }
                 }
+                Poll::Ready(None)
             }
-            Err(crossbeam_queue::PopError) => Poll::Pending,
+            None => Poll::Pending,
         }
     }
 }
@@ -87,6 +81,24 @@ fn process_scancode(scancode: u8) -> Option<KeyEvent> {
             }
         } else {
             None
+        }
+    } else {
+        None
+    }
+}
+
+fn decode_key(key_event: pc_keyboard::KeyEvent) -> Option<KeyEvent> {
+    lazy_static::lazy_static! {
+        static ref KEYBOARD: spin::Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
+            spin::Mutex::new(Keyboard::new(layouts::Us104Key, ScancodeSet1,
+                HandleControl::Ignore));
+    }
+
+    let mut keyboard = KEYBOARD.lock();
+    if let Some(key) = keyboard.process_keyevent(key_event) {
+        match key {
+            DecodedKey::Unicode(character) => Some(KeyEvent::Char(character)),
+            DecodedKey::RawKey(key) => Some(KeyEvent::SpecialKey(key)),
         }
     } else {
         None

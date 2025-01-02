@@ -17,9 +17,9 @@ This project is a minimal operating system implemented in Rust, running directly
   - [x] Physical memory management
   - [x] Virtual memory & paging
 - [x] Heap allocation
-- [ ] Multi-threading support
-- [ ] Basic filesystem
-- [ ] User space programs
+- [x] Multi-threading support
+- [x] Basic filesystem
+- [x] User space programs
 
 ## Project Structure
 

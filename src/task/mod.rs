@@ -1,9 +1,9 @@
-use core::{future::Future, pin::Pin, task::{Context, Poll}};
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec, vec::Vec};
 use spin::{Mutex, RwLock};
 use lazy_static::lazy_static;
 use x86_64::instructions::interrupts;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::println;
 
 pub mod context;
 pub mod sync;
@@ -25,6 +25,7 @@ pub enum TaskPriority {
     High = 2,
 }
 
+#[derive(Debug)]
 pub struct Task {
     id: usize,
     state: TaskState,

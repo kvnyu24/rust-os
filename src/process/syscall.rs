@@ -1,8 +1,8 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use lazy_static::lazy_static;
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::arch::asm;
-use crate::{fs, println};
+use crate::{fs, print, println};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(usize)]
@@ -181,4 +181,22 @@ fn sys_getpid() -> usize {
         .current_process()
         .map(|p| p.read().id())
         .unwrap_or(0)
+}
+
+impl From<usize> for SyscallNumber {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => SyscallNumber::Exit,
+            1 => SyscallNumber::Write,
+            2 => SyscallNumber::Read,
+            3 => SyscallNumber::Open,
+            4 => SyscallNumber::Close,
+            5 => SyscallNumber::CreateFile,
+            6 => SyscallNumber::CreateDir,
+            7 => SyscallNumber::Remove,
+            8 => SyscallNumber::Spawn,
+            9 => SyscallNumber::GetPid,
+            _ => SyscallNumber::Exit, // Default to Exit for invalid syscall numbers
+        }
+    }
 } 

@@ -1,3 +1,5 @@
+use crate::task::SCHEDULER;
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TaskContext {
@@ -29,6 +31,14 @@ impl TaskContext {
     pub fn switch(&mut self, next: &mut TaskContext) {
         unsafe {
             switch_context_inner(self, next);
+        }
+    }
+
+    pub fn switch_to(&mut self, next: &mut TaskContext) {
+        let mut guard = SCHEDULER.lock();
+        if let Some(current) = guard.current.as_ref() {
+            let mut current = current.write();
+            self.switch(next);
         }
     }
 }

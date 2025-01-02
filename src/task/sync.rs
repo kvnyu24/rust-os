@@ -1,60 +1,62 @@
 use alloc::collections::VecDeque;
-use core::sync::atomic::{AtomicBool, Ordering};
-use spin::{Mutex, MutexGuard};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use spin::{Mutex as SpinMutex, MutexGuard};
 use alloc::sync::Arc;
-use super::{TaskState, SCHEDULER};
 
 pub struct Semaphore {
-    count: Mutex<isize>,
-    waiters: Mutex<VecDeque<Arc<AtomicBool>>>,
+    count: AtomicUsize,
+    waiters: SpinMutex<VecDeque<Arc<AtomicBool>>>,
 }
 
 impl Semaphore {
-    pub fn new(initial: isize) -> Self {
+    pub const fn new(initial: usize) -> Self {
         Self {
-            count: Mutex::new(initial),
-            waiters: Mutex::new(VecDeque::new()),
+            count: AtomicUsize::new(initial),
+            waiters: SpinMutex::new(VecDeque::with_capacity(0)),
         }
     }
 
     pub fn acquire(&self) {
-        let mut count = self.count.lock();
-        if *count > 0 {
-            *count -= 1;
-            return;
-        }
+        loop {
+            let current = self.count.load(Ordering::SeqCst);
+            if current > 0 && self.count.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ).is_ok() {
+                break;
+            }
 
-        // Create a waiter flag
-        let waiter = Arc::new(AtomicBool::new(false));
-        self.waiters.lock().push_back(Arc::clone(&waiter));
-        drop(count);
+            // Create a waiter flag
+            let waiter = Arc::new(AtomicBool::new(false));
+            self.waiters.lock().push_back(Arc::clone(&waiter));
 
-        // Wait until we're woken up
-        while !waiter.load(Ordering::SeqCst) {
-            super::yield_now();
+            // Wait until we're woken up
+            while !waiter.load(Ordering::SeqCst) {
+                super::yield_now();
+            }
         }
     }
 
     pub fn release(&self) {
-        let mut count = self.count.lock();
-        *count += 1;
-
+        self.count.fetch_add(1, Ordering::SeqCst);
         if let Some(waiter) = self.waiters.lock().pop_front() {
             waiter.store(true, Ordering::SeqCst);
         }
     }
 }
 
-pub struct Mutex<T> {
-    inner: spin::Mutex<T>,
-    waiters: Mutex<VecDeque<Arc<AtomicBool>>>,
+pub struct BlockingMutex<T> {
+    inner: SpinMutex<T>,
+    waiters: SpinMutex<VecDeque<Arc<AtomicBool>>>,
 }
 
-impl<T> Mutex<T> {
+impl<T> BlockingMutex<T> {
     pub fn new(value: T) -> Self {
         Self {
-            inner: spin::Mutex::new(value),
-            waiters: Mutex::new(VecDeque::new()),
+            inner: SpinMutex::new(value),
+            waiters: SpinMutex::new(VecDeque::new()),
         }
     }
 
@@ -78,10 +80,8 @@ impl<T> Mutex<T> {
             }
         }
     }
-}
 
-impl<T> Drop for MutexGuard<'_, T> {
-    fn drop(&mut self) {
+    pub fn unlock_next(&self) {
         if let Some(waiter) = self.waiters.lock().pop_front() {
             waiter.store(true, Ordering::SeqCst);
         }
@@ -89,17 +89,17 @@ impl<T> Drop for MutexGuard<'_, T> {
 }
 
 pub struct Condvar {
-    waiters: Mutex<VecDeque<Arc<AtomicBool>>>,
+    waiters: SpinMutex<VecDeque<Arc<AtomicBool>>>,
 }
 
 impl Condvar {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            waiters: Mutex::new(VecDeque::new()),
+            waiters: SpinMutex::new(VecDeque::new()),
         }
     }
 
-    pub fn wait<T>(&self, mutex: &Mutex<T>) {
+    pub fn wait<T>(&self, mutex: &BlockingMutex<T>) {
         let waiter = Arc::new(AtomicBool::new(false));
         self.waiters.lock().push_back(Arc::clone(&waiter));
 
@@ -132,16 +132,16 @@ impl Condvar {
 
 pub struct RwLock<T> {
     inner: spin::RwLock<T>,
-    read_waiters: Mutex<VecDeque<Arc<AtomicBool>>>,
-    write_waiters: Mutex<VecDeque<Arc<AtomicBool>>>,
+    read_waiters: SpinMutex<VecDeque<Arc<AtomicBool>>>,
+    write_waiters: SpinMutex<VecDeque<Arc<AtomicBool>>>,
 }
 
 impl<T> RwLock<T> {
     pub fn new(value: T) -> Self {
         Self {
             inner: spin::RwLock::new(value),
-            read_waiters: Mutex::new(VecDeque::new()),
-            write_waiters: Mutex::new(VecDeque::new()),
+            read_waiters: SpinMutex::new(VecDeque::new()),
+            write_waiters: SpinMutex::new(VecDeque::new()),
         }
     }
 
