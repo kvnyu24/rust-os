@@ -24,10 +24,12 @@ This project is a minimal operating system implemented in Rust, running directly
   - [ ] File read/write buffering
   - [ ] Basic disk driver for persistence
 - [x] User space programs
-- [ ] Shell Environment
-  - [ ] Command-line interface (ls, cd, cat, etc.)
-  - [ ] Command history
-  - [ ] Tab completion
+- [x] Shell Environment
+  - [x] Command-line interface (ls, cd, cat, etc.)
+  - [x] Command history
+  - [x] Tab completion
+  - [x] File redirection (>, >>, <)
+  - [x] Command piping (|)
   - [ ] Basic shell scripting
 - [ ] Network Stack
   - [ ] Network driver

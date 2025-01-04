@@ -8,18 +8,151 @@ use crate::fs;
 use crate::vga_buffer;
 
 #[derive(Debug)]
+pub enum Redirection {
+    None,
+    Input(String),           // <
+    Output(String),          // >
+    Append(String),          // >>
+    Pipe(Box<Command>),      // |
+}
+
+#[derive(Debug)]
 pub struct Command {
     name: String,
     args: Vec<String>,
+    input_redirect: Redirection,
+    output_redirect: Redirection,
 }
 
 impl Command {
     pub fn new(input: &str) -> Option<Self> {
-        let mut parts = input.split_whitespace();
-        let name = parts.next()?.to_string();
-        let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+        let mut parts = Vec::new();
+        let mut current_part = String::new();
+        let mut in_quotes = false;
+        let mut chars = input.chars().peekable();
+
+        // Parse the command line, handling quotes, redirection, and pipes
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => in_quotes = !in_quotes,
+                ' ' if !in_quotes => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                        current_part = String::new();
+                    }
+                }
+                '>' => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                        current_part = String::new();
+                    }
+                    if chars.peek() == Some(&'>') {
+                        chars.next(); // consume second '>'
+                        parts.push(">>".to_string());
+                    } else {
+                        parts.push(">".to_string());
+                    }
+                }
+                '<' => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                        current_part = String::new();
+                    }
+                    parts.push("<".to_string());
+                }
+                '|' => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                        current_part = String::new();
+                    }
+                    parts.push("|".to_string());
+                }
+                _ => current_part.push(c),
+            }
+        }
+        if !current_part.is_empty() {
+            parts.push(current_part);
+        }
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        // Split commands by pipe
+        let mut commands = Vec::new();
+        let mut current_cmd = Vec::new();
         
-        Some(Command { name, args })
+        for part in parts {
+            if part == "|" {
+                if !current_cmd.is_empty() {
+                    commands.push(current_cmd);
+                    current_cmd = Vec::new();
+                }
+            } else {
+                current_cmd.push(part);
+            }
+        }
+        if !current_cmd.is_empty() {
+            commands.push(current_cmd);
+        }
+
+        // Process each command in the pipeline
+        let mut final_command = None;
+        for cmd_parts in commands.into_iter().rev() {
+            let mut i = 0;
+            let mut args = Vec::new();
+            let mut input_redirect = if let Some(cmd) = final_command {
+                Redirection::Pipe(Box::new(cmd))
+            } else {
+                Redirection::None
+            };
+            let mut output_redirect = Redirection::None;
+
+            let name = cmd_parts[i].clone();
+            i += 1;
+
+            while i < cmd_parts.len() {
+                match cmd_parts[i].as_str() {
+                    "<" => {
+                        if i + 1 < cmd_parts.len() {
+                            input_redirect = Redirection::Input(cmd_parts[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return None; // Missing input file
+                        }
+                    }
+                    ">" => {
+                        if i + 1 < cmd_parts.len() {
+                            output_redirect = Redirection::Output(cmd_parts[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return None; // Missing output file
+                        }
+                    }
+                    ">>" => {
+                        if i + 1 < cmd_parts.len() {
+                            output_redirect = Redirection::Append(cmd_parts[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return None; // Missing output file
+                        }
+                    }
+                    _ => {
+                        args.push(cmd_parts[i].clone());
+                        i += 1;
+                    }
+                }
+            }
+
+            final_command = Some(Command {
+                name,
+                args,
+                input_redirect,
+                output_redirect,
+            });
+        }
+
+        final_command
     }
 }
 
@@ -182,7 +315,73 @@ impl Shell {
         }
     }
 
-    // Update execute to include new commands
+    // Add execute_command method to handle single command execution
+    fn execute_command(&self, command: &Command, input: Option<Vec<u8>>) -> Vec<u8> {
+        let mut output_buffer = Vec::new();
+
+        // Handle input redirection
+        let input_contents = match &command.input_redirect {
+            Redirection::Input(file) => {
+                let path = self.resolve_path(file);
+                match fs::ROOT_FS.read().read_file(&path) {
+                    Ok(contents) => Some(contents),
+                    Err(e) => {
+                        println!("Error reading {}: {}", file, e);
+                        return output_buffer;
+                    }
+                }
+            }
+            Redirection::Pipe(_) => input,
+            _ => None,
+        };
+
+        // Override print macros to capture output
+        macro_rules! print {
+            ($($arg:tt)*) => ({
+                let s = format!($($arg)*);
+                output_buffer.extend(s.as_bytes());
+            });
+        }
+        macro_rules! println {
+            () => ({
+                output_buffer.extend(b"\n");
+            });
+            ($($arg:tt)*) => ({
+                print!($($arg)*);
+                output_buffer.extend(b"\n");
+            });
+        }
+
+        // Execute the command
+        match command.name.as_str() {
+            "ls" => self.cmd_ls(&command.args),
+            "cd" => self.cmd_cd(&command.args),
+            "pwd" => self.cmd_pwd(),
+            "help" => self.cmd_help(),
+            "clear" => self.cmd_clear(),
+            "cat" => {
+                if let Some(contents) = input_contents {
+                    // If there's input redirection, print the redirected contents
+                    for byte in contents {
+                        print!("{}", byte as char);
+                    }
+                } else {
+                    self.cmd_cat(&command.args);
+                }
+            }
+            "mkdir" => self.cmd_mkdir(&command.args),
+            "touch" => self.cmd_touch(&command.args),
+            "rm" => self.cmd_rm(&command.args),
+            "echo" => self.cmd_echo(&command.args),
+            "cp" => self.cmd_cp(&command.args),
+            "mv" => self.cmd_mv(&command.args),
+            _ => println!("Unknown command: {}", command.name),
+        }
+
+        output_buffer
+    }
+
+    // Update execute to handle pipes
     pub fn execute(&mut self, input: &str) {
         if input.trim().is_empty() {
             return;
@@ -197,24 +396,51 @@ impl Shell {
             None => return,
         };
 
-        match command.name.as_str() {
-            "ls" => self.cmd_ls(&command.args),
-            "cd" => self.cmd_cd(&command.args),
-            "pwd" => self.cmd_pwd(),
-            "help" => self.cmd_help(),
-            "clear" => self.cmd_clear(),
-            "cat" => self.cmd_cat(&command.args),
-            "mkdir" => self.cmd_mkdir(&command.args),
-            "touch" => self.cmd_touch(&command.args),
-            "rm" => self.cmd_rm(&command.args),
-            "echo" => self.cmd_echo(&command.args),
-            "cp" => self.cmd_cp(&command.args),
-            "mv" => self.cmd_mv(&command.args),
-            _ => println!("Unknown command: {}", command.name),
+        // Execute the command pipeline
+        let output = self.execute_pipeline(&command);
+
+        // Handle final output redirection
+        match command.output_redirect {
+            Redirection::Output(ref file) => {
+                let path = self.resolve_path(file);
+                if let Err(e) = fs::ROOT_FS.read().create_file(&path, output) {
+                    println!("Error writing to {}: {}", file, e);
+                }
+            }
+            Redirection::Append(ref file) => {
+                let path = self.resolve_path(file);
+                let mut contents = match fs::ROOT_FS.read().read_file(&path) {
+                    Ok(c) => c,
+                    Err(_) => Vec::new(),
+                };
+                contents.extend(output);
+                if let Err(e) = fs::ROOT_FS.read().create_file(&path, contents) {
+                    println!("Error appending to {}: {}", file, e);
+                }
+            }
+            Redirection::None => {
+                // Print the output
+                for byte in output {
+                    print!("{}", byte as char);
+                }
+            }
+            _ => {}
         }
     }
 
-    // Update help to include new commands
+    // Add execute_pipeline method to handle command pipelines
+    fn execute_pipeline(&self, command: &Command) -> Vec<u8> {
+        match &command.input_redirect {
+            Redirection::Pipe(prev_command) => {
+                // Execute the previous command and use its output as input
+                let prev_output = self.execute_pipeline(prev_command);
+                self.execute_command(command, Some(prev_output))
+            }
+            _ => self.execute_command(command, None)
+        }
+    }
+
+    // Update help to include pipe information
     fn cmd_help(&self) {
         println!("Available commands:");
         println!("  ls [path]     - List directory contents");
@@ -229,6 +455,11 @@ impl Shell {
         println!("  mv <src> <dst> - Move a file");
         println!("  clear         - Clear the screen");
         println!("  help          - Show this help message");
+        println!("\nRedirection and Pipes:");
+        println!("  command < file   - Input redirection");
+        println!("  command > file   - Output redirection (overwrite)");
+        println!("  command >> file  - Output redirection (append)");
+        println!("  cmd1 | cmd2      - Pipe output of cmd1 to input of cmd2");
         println!("\nUse Tab for command/path completion");
     }
 
