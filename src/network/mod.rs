@@ -6,6 +6,9 @@ use lazy_static::lazy_static;
 pub mod driver;
 pub mod ip;
 pub mod tcp;
+pub mod udp;
+pub mod icmp;
+pub mod arp;
 pub mod ethernet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,20 +105,67 @@ impl NetworkInterface {
     }
 
     fn process_rx_buffer(&mut self) {
-        // TODO: Implement packet processing
-        // 1. Parse Ethernet frame
-        // 2. Handle ARP/IP packets
-        // 3. Process TCP/UDP segments
+        if let Some(frame) = ethernet::EthernetFrame::parse(&self.rx_buffer) {
+            match frame.ethertype() {
+                ethernet::EtherType::Arp => {
+                    if let Some(arp_packet) = arp::ArpPacket::parse(frame.payload()) {
+                        arp::handle_arp_packet(arp_packet);
+                    }
+                }
+                ethernet::EtherType::Ipv4 => {
+                    if let Some(ip_packet) = ip::IpPacket::parse(frame.payload()) {
+                        match ip_packet.protocol() {
+                            ip::IpProtocol::Icmp => {
+                                if let Some(icmp_packet) = icmp::IcmpPacket::parse(ip_packet.payload()) {
+                                    icmp::handle_icmp_packet(icmp_packet, ip_packet.source());
+                                }
+                            }
+                            ip::IpProtocol::Tcp => {
+                                if let Some(tcp_segment) = tcp::TcpSegment::parse(ip_packet.payload()) {
+                                    // Handle TCP segment
+                                }
+                            }
+                            ip::IpProtocol::Udp => {
+                                if let Some(udp_packet) = udp::UdpPacket::parse(ip_packet.payload()) {
+                                    udp::handle_udp_packet(udp_packet, ip_packet.source());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         self.rx_buffer.clear();
     }
 
     fn process_tx_buffer(&mut self) {
-        // TODO: Implement packet sending
-        // 1. Build Ethernet frame
-        // 2. Add IP header
-        // 3. Add TCP/UDP header
-        // 4. Send through network driver
+        if let Some(driver) = &mut *driver::NETWORK_DRIVER.lock() {
+            let _ = driver.send(&self.tx_buffer);
+        }
         self.tx_buffer.clear();
+    }
+
+    pub fn send_ip(&mut self, packet: &ip::IpPacket) -> Result<(), &'static str> {
+        // Get destination MAC address through ARP
+        let dest_mac = if let Some(mac) = arp::get_mac_address(packet.destination()) {
+            mac
+        } else {
+            return Err("Could not resolve MAC address");
+        };
+
+        // Create Ethernet frame
+        let frame = ethernet::EthernetFrame::new(
+            dest_mac,
+            self.mac_address,
+            ethernet::EtherType::Ipv4,
+            packet.to_bytes(),
+        );
+
+        self.tx_buffer.extend_from_slice(&frame.to_bytes());
+        self.process_tx_buffer();
+        Ok(())
     }
 }
 

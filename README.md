@@ -33,9 +33,15 @@ This project is a minimal operating system implemented in Rust, running directly
   - [ ] Basic shell scripting
 - [x] Network Stack
   - [x] Network driver (RTL8139)
-  - [x] TCP/IP implementation
-  - [ ] Basic network services (DHCP, DNS)
+  - [x] Ethernet frame handling
+  - [x] ARP protocol
+  - [x] IPv4 implementation
+  - [x] ICMP (ping) support
+  - [x] TCP protocol
+  - [x] UDP protocol
   - [ ] Socket interface
+  - [ ] DHCP client
+  - [ ] DNS resolver
   - [ ] Network utilities (ping, netstat)
 - [ ] Advanced Process Management
   - [ ] Inter-process communication (IPC)
