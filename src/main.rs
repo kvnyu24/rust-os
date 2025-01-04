@@ -16,6 +16,7 @@ mod keyboard;
 mod task;
 mod fs;
 mod process;
+mod shell;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
@@ -25,6 +26,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::{StreamExt, FutureExt};
 use memory::heap::init_heap;
 use lazy_static::lazy_static;
+use alloc::string::String;
 
 lazy_static! {
     pub static ref PRINT_SEMAPHORE: Semaphore = {
@@ -164,11 +166,64 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     // Create a keyboard event stream
     let mut keyboard_events = keyboard::KeyboardStream::new();
     
+    println!("Starting shell...");
+    
+    let mut shell = shell::init();
+    let mut current_line = String::new();
+    print!("> ");  // Initial prompt
+    
     loop {
         if let Some(event) = keyboard_events.next().now_or_never().flatten() {
             match event {
-                keyboard::KeyEvent::Char(c) => print!("{}", c),
-                keyboard::KeyEvent::SpecialKey(key) => print!("{:?}", key),
+                keyboard::KeyEvent::Char('\n') => {
+                    println!();  // New line after Enter
+                    if !current_line.is_empty() {
+                        shell.execute(&current_line);
+                        current_line.clear();
+                    }
+                    print!("> ");  // Shell prompt
+                },
+                keyboard::KeyEvent::Char(c) => {
+                    print!("{}", c);
+                    current_line.push(c);
+                },
+                keyboard::KeyEvent::SpecialKey(key) => {
+                    match key {
+                        keyboard::SpecialKey::Backspace => {
+                            if !current_line.is_empty() {
+                                current_line.pop();
+                                print!("\x08 \x08");  // Backspace, space, backspace
+                            }
+                        },
+                        keyboard::SpecialKey::UpArrow => {
+                            // Clear current line
+                            while !current_line.is_empty() {
+                                print!("\x08 \x08");
+                                current_line.pop();
+                            }
+                            
+                            // Get previous command
+                            if let Some(cmd) = shell.previous_command() {
+                                current_line = cmd.to_string();
+                                print!("{}", current_line);
+                            }
+                        },
+                        keyboard::SpecialKey::DownArrow => {
+                            // Clear current line
+                            while !current_line.is_empty() {
+                                print!("\x08 \x08");
+                                current_line.pop();
+                            }
+                            
+                            // Get next command
+                            if let Some(cmd) = shell.next_command() {
+                                current_line = cmd.to_string();
+                                print!("{}", current_line);
+                            }
+                        },
+                        _ => {}
+                    }
+                }
             }
         }
         task::yield_now();

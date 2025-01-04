@@ -19,7 +19,28 @@ This project is a minimal operating system implemented in Rust, running directly
 - [x] Heap allocation
 - [x] Multi-threading support
 - [x] Basic filesystem
+  - [ ] File permissions and ownership
+  - [ ] Directory traversal
+  - [ ] File read/write buffering
+  - [ ] Basic disk driver for persistence
 - [x] User space programs
+- [ ] Shell Environment
+  - [ ] Command-line interface (ls, cd, cat, etc.)
+  - [ ] Command history
+  - [ ] Tab completion
+  - [ ] Basic shell scripting
+- [ ] Network Stack
+  - [ ] Network driver
+  - [ ] TCP/IP implementation
+  - [ ] Basic network services
+- [ ] Advanced Process Management
+  - [ ] Inter-process communication (IPC)
+  - [ ] Enhanced process isolation
+  - [ ] Extended system calls
+- [ ] Device Management
+  - [ ] Device driver framework
+  - [ ] Additional hardware support
+  - [ ] Power management
 
 ## Project Structure
 
