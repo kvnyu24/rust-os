@@ -1,9 +1,14 @@
 use alloc::vec::Vec;
+use alloc::string::String;
+use alloc::boxed::Box;
 use core::fmt;
-use crate::network::IpAddress;
+use crate::network::{IpAddress, NETWORK_DRIVER};
+use spin::Mutex;
 
-const TCP_HEADER_LEN: usize = 20;  // Without options
+/// Length of TCP header without options
+const TCP_HEADER_LEN: usize = 20;
 
+/// Represents the possible states of a TCP connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TcpState {
     Closed,
@@ -19,17 +24,19 @@ pub enum TcpState {
     TimeWait,
 }
 
+/// TCP control flags used in the TCP header
 #[derive(Debug, Clone, Copy)]
 pub struct TcpFlags {
-    pub fin: bool,
-    pub syn: bool,
-    pub rst: bool,
-    pub psh: bool,
-    pub ack: bool,
-    pub urg: bool,
+    pub fin: bool,  // Finish flag
+    pub syn: bool,  // Synchronize flag
+    pub rst: bool,  // Reset flag 
+    pub psh: bool,  // Push flag
+    pub ack: bool,  // Acknowledgment flag
+    pub urg: bool,  // Urgent flag
 }
 
 impl TcpFlags {
+    /// Creates a new TcpFlags struct with all flags set to false
     pub fn new() -> Self {
         TcpFlags {
             fin: false,
@@ -41,6 +48,7 @@ impl TcpFlags {
         }
     }
 
+    /// Creates TcpFlags from a byte representation
     pub fn from_byte(byte: u8) -> Self {
         TcpFlags {
             fin: (byte & 0x01) != 0,
@@ -52,6 +60,7 @@ impl TcpFlags {
         }
     }
 
+    /// Converts TcpFlags to a byte representation
     pub fn to_byte(&self) -> u8 {
         let mut byte = 0;
         if self.fin { byte |= 0x01; }
@@ -64,6 +73,7 @@ impl TcpFlags {
     }
 }
 
+/// Represents a TCP segment with header fields and payload
 #[derive(Debug)]
 pub struct TcpSegment {
     source_port: u16,
@@ -79,6 +89,7 @@ pub struct TcpSegment {
 }
 
 impl TcpSegment {
+    /// Creates a new TCP segment with the given parameters
     pub fn new(
         source_port: u16,
         destination_port: u16,
@@ -96,12 +107,13 @@ impl TcpSegment {
             data_offset: (TCP_HEADER_LEN / 4) as u8,
             flags,
             window_size,
-            checksum: 0,  // Will be calculated
+            checksum: 0,  // Will be calculated later
             urgent_pointer: 0,
             payload,
         }
     }
 
+    /// Parses a byte slice into a TCP segment
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < TCP_HEADER_LEN {
             return None;
@@ -138,6 +150,7 @@ impl TcpSegment {
         })
     }
 
+    /// Converts the TCP segment to a byte vector
     pub fn to_bytes(&mut self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(TCP_HEADER_LEN + self.payload.len());
 
@@ -174,17 +187,17 @@ impl TcpSegment {
         bytes
     }
 
+    /// Calculates TCP checksum including pseudo-header
     pub fn calculate_checksum(&mut self, source_ip: IpAddress, dest_ip: IpAddress) {
-        // TCP checksum includes a pseudo-header with IP addresses
         let mut sum: u32 = 0;
 
         // Add source IP
-        for byte in source_ip.as_bytes().chunks(2) {
+        for byte in source_ip.octets.chunks(2) {
             sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
         }
 
         // Add destination IP
-        for byte in dest_ip.as_bytes().chunks(2) {
+        for byte in dest_ip.octets.chunks(2) {
             sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
         }
 
@@ -213,6 +226,7 @@ impl TcpSegment {
     }
 }
 
+/// Represents a TCP connection with associated state and buffers
 #[derive(Debug)]
 pub struct TcpConnection {
     state: TcpState,
@@ -227,6 +241,7 @@ pub struct TcpConnection {
 }
 
 impl TcpConnection {
+    /// Creates a new TCP connection bound to the given local address and port
     pub fn new(local_addr: IpAddress, local_port: u16) -> Self {
         TcpConnection {
             state: TcpState::Closed,
@@ -241,6 +256,7 @@ impl TcpConnection {
         }
     }
 
+    /// Initiates a TCP connection to the specified remote endpoint
     pub fn connect(&mut self, remote_addr: IpAddress, remote_port: u16) -> Result<(), &'static str> {
         if self.state != TcpState::Closed {
             return Err("Connection already exists");
@@ -248,8 +264,8 @@ impl TcpConnection {
 
         self.remote_addr = remote_addr;
         self.remote_port = remote_port;
-        self.sequence_number = 0;  // Should be random
-        
+        self.sequence_number = 0;  // TODO: Should be random for security
+
         // Send SYN
         let mut flags = TcpFlags::new();
         flags.syn = true;
@@ -265,7 +281,9 @@ impl TcpConnection {
         );
 
         segment.calculate_checksum(self.local_addr, self.remote_addr);
-        // TODO: Send segment through IP layer
+        if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+            driver.send(&segment.to_bytes())?;
+        }
 
         self.state = TcpState::SynSent;
         self.sequence_number += 1;
@@ -273,30 +291,29 @@ impl TcpConnection {
         Ok(())
     }
 
+    /// Handles an incoming TCP segment based on current connection state
     pub fn handle_segment(&mut self, segment: TcpSegment) {
         match self.state {
             TcpState::Listen => {
                 if segment.flags.syn {
-                    // Handle incoming connection
                     self.handle_syn_received(segment);
                 }
             }
             TcpState::SynSent => {
                 if segment.flags.syn && segment.flags.ack {
-                    // Handle SYN-ACK
                     self.handle_syn_ack_received(segment);
                 }
             }
             TcpState::Established => {
-                // Handle data transfer
                 self.handle_established(segment);
             }
             _ => {}
         }
     }
 
+    /// Handles incoming SYN segment in Listen state
     fn handle_syn_received(&mut self, segment: TcpSegment) {
-        self.remote_addr = IpAddress::new([0, 0, 0, 0]);  // Should get from IP header
+        self.remote_addr = IpAddress::new([0, 0, 0, 0]);  // TODO: Get from IP header
         self.remote_port = segment.source_port;
         self.acknowledgment_number = segment.sequence_number + 1;
 
@@ -316,12 +333,15 @@ impl TcpConnection {
         );
 
         response.calculate_checksum(self.local_addr, self.remote_addr);
-        // TODO: Send response through IP layer
+        if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+            let _ = driver.send(&response.to_bytes());
+        }
 
         self.state = TcpState::SynReceived;
         self.sequence_number += 1;
     }
 
+    /// Handles SYN-ACK segment in SynSent state
     fn handle_syn_ack_received(&mut self, segment: TcpSegment) {
         if segment.acknowledgment_number == self.sequence_number {
             self.acknowledgment_number = segment.sequence_number + 1;
@@ -341,12 +361,15 @@ impl TcpConnection {
             );
 
             response.calculate_checksum(self.local_addr, self.remote_addr);
-            // TODO: Send response through IP layer
+            if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+                let _ = driver.send(&response.to_bytes());
+            }
 
             self.state = TcpState::Established;
         }
     }
 
+    /// Handles segments in Established state
     fn handle_established(&mut self, segment: TcpSegment) {
         if !segment.payload.is_empty() {
             // Process received data
@@ -368,7 +391,51 @@ impl TcpConnection {
             );
 
             response.calculate_checksum(self.local_addr, self.remote_addr);
-            // TODO: Send response through IP layer
+            if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+                let _ = driver.send(&response.to_bytes());
+            }
         }
     }
-} 
+
+    /// Sends data over the established TCP connection
+    pub fn send(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        if self.state != TcpState::Established {
+            return Err("Connection not established");
+        }
+
+        let mut flags = TcpFlags::new();
+        flags.psh = true;
+        flags.ack = true;
+
+        let mut segment = TcpSegment::new(
+            self.local_port,
+            self.remote_port,
+            self.sequence_number,
+            self.acknowledgment_number,
+            flags,
+            self.window_size,
+            data.to_vec(),
+        );
+
+        segment.calculate_checksum(self.local_addr, self.remote_addr);
+        if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+            driver.send(&segment.to_bytes())?;
+        }
+
+        self.sequence_number += data.len() as u32;
+        Ok(())
+    }
+
+    pub fn start_listen(&mut self) -> Result<(), &'static str> {
+        if self.state != TcpState::Closed {
+            return Err("Connection not in closed state");
+        }
+        self.state = TcpState::Listen;
+        Ok(())
+    }
+}
+
+/// Handles an incoming TCP segment
+pub fn handle_tcp_segment(segment: TcpSegment, source_ip: IpAddress, dest_ip: IpAddress) {
+    // TODO: Implement TCP connection handling logic
+}

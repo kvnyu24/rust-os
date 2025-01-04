@@ -1,12 +1,17 @@
-use alloc::vec::Vec;
-use alloc::string::String;
 use alloc::format;
+use alloc::vec::Vec;
+use core::time::Duration;
 use core::sync::atomic::{AtomicU16, Ordering};
-use crate::network::{IpAddress, icmp};
+use x86_64::instructions::port::Port;
+use crate::network::{IpAddress, icmp::{IcmpPacket, IcmpType}};
 use crate::println;
+use crate::network::prelude::*;
+use crate::network::driver::NETWORK_DRIVER;
+use crate::network::socket::{Socket, SOCKETS};
 
 static PING_ID: AtomicU16 = AtomicU16::new(1);
 
+#[derive(Debug)]
 pub struct PingStatistics {
     pub packets_sent: u32,
     pub packets_received: u32,
@@ -15,113 +20,118 @@ pub struct PingStatistics {
     pub avg_rtt: u64,
 }
 
-pub fn ping(destination: IpAddress, count: Option<u32>) -> Result<PingStatistics, &'static str> {
-    let id = PING_ID.fetch_add(1, Ordering::SeqCst);
-    let mut sequence = 0;
-    let mut stats = PingStatistics {
-        packets_sent: 0,
-        packets_received: 0,
-        min_rtt: u64::MAX,
-        max_rtt: 0,
-        avg_rtt: 0,
-    };
-
-    let max_count = count.unwrap_or(4);
-    let payload = b"RustOS Ping".to_vec();
-
-    println!("PING {} with {} bytes of data", destination, payload.len());
-
-    while stats.packets_sent < max_count {
-        // Send ping request
-        if let Err(e) = icmp::send_echo_request(destination, id, sequence, payload.clone()) {
-            println!("Failed to send ping: {}", e);
-            continue;
+impl PingStatistics {
+    pub fn new() -> Self {
+        PingStatistics {
+            packets_sent: 0,
+            packets_received: 0,
+            min_rtt: u64::MAX,
+            max_rtt: 0,
+            avg_rtt: 0,
         }
-
-        stats.packets_sent += 1;
-        sequence += 1;
-
-        // TODO: Wait for reply with timeout
-        // For now, we'll just simulate some basic statistics
-        stats.packets_received += 1;
-        let rtt = 100; // Simulated RTT in milliseconds
-        stats.min_rtt = core::cmp::min(stats.min_rtt, rtt);
-        stats.max_rtt = core::cmp::max(stats.max_rtt, rtt);
-        stats.avg_rtt = (stats.avg_rtt * (stats.packets_received - 1) + rtt) / stats.packets_received;
-
-        println!("Reply from {}: bytes={} time={}ms", destination, payload.len(), rtt);
-
-        // Sleep for a second between pings
-        for _ in 0..1_000_000 { core::hint::spin_loop(); }
     }
 
-    println!("\nPing statistics for {}:", destination);
-    println!("    Packets: Sent = {}, Received = {}, Lost = {} ({}% loss)",
-        stats.packets_sent,
-        stats.packets_received,
-        stats.packets_sent - stats.packets_received,
-        ((stats.packets_sent - stats.packets_received) * 100) / stats.packets_sent
-    );
-    println!("Round trip times in milliseconds:");
-    println!("    Minimum = {}ms, Maximum = {}ms, Average = {}ms",
-        stats.min_rtt,
-        stats.max_rtt,
-        stats.avg_rtt
-    );
+    pub fn update(&mut self, rtt: u64) {
+        self.packets_received += 1;
+        self.min_rtt = self.min_rtt.min(rtt);
+        self.max_rtt = self.max_rtt.max(rtt);
+        
+        // Update average RTT using weighted average
+        self.avg_rtt = if self.packets_received == 1 {
+            rtt
+        } else {
+            ((self.avg_rtt * (self.packets_received - 1) as u64) + rtt) / self.packets_received as u64
+        };
+    }
+}
+
+pub fn get_timestamp() -> u64 {
+    unsafe {
+        let mut port: Port<u8> = Port::new(0x70);
+        port.write(0u8);
+        let mut port: Port<u8> = Port::new(0x71);
+        port.read() as u64
+    }
+}
+
+pub fn sleep(duration: Duration) {
+    let start = get_timestamp();
+    while get_timestamp() - start < duration.as_millis() as u64 {
+        core::hint::spin_loop();
+    }
+}
+
+pub fn ping(dest_ip: IpAddress, count: u32) -> Result<PingStatistics, &'static str> {
+    let mut stats = PingStatistics::new();
+    let id = PING_ID.fetch_add(1, Ordering::SeqCst);
+    
+    for sequence in 1..=count {
+        stats.packets_sent += 1;
+
+        // Create ICMP echo request with timestamp
+        let timestamp = get_timestamp();
+            
+        let mut packet = IcmpPacket::new_echo_request(
+            id,
+            sequence as u16,
+            timestamp.to_be_bytes().to_vec(),
+        );
+
+        if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+            driver.send(&packet.to_bytes())?;
+
+            // Wait for reply with timeout
+            let mut attempts = 0;
+            const MAX_ATTEMPTS: u64 = 3;
+            const TIMEOUT_MS: u64 = 1000;
+
+            while attempts < MAX_ATTEMPTS {
+                let mut buffer = vec![0; 1500]; // Standard MTU size
+                if let Some(received_data) = driver.receive() {
+                    if received_data.len() > 0 {
+                        if let Some(reply) = IcmpPacket::parse(&received_data) {
+                            if reply.get_type() == IcmpType::EchoReply && reply.get_identifier() == id {
+                                let now = get_timestamp();
+                                let rtt = now.saturating_sub(timestamp);
+                                stats.update(rtt);
+                                break;
+                            }
+                        }
+                    }
+                }
+                attempts += 1;
+                sleep(Duration::from_millis(TIMEOUT_MS / MAX_ATTEMPTS));
+            }
+        }
+    }
 
     Ok(stats)
 }
 
 pub fn netstat() {
-    println!("Active Internet connections");
-    println!("Proto Local Address           Foreign Address         State");
-
-    // TCP connections
-    if let Some(connections) = crate::network::tcp::get_connections() {
-        for conn in connections {
-            println!("tcp   {}:{:<16} {}:{:<16} {}",
-                conn.local_addr(),
-                conn.local_port(),
-                conn.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| String::from("*")),
-                conn.remote_port().map(|p| p.to_string()).unwrap_or_else(|| String::from("*")),
-                format!("{:?}", conn.state())
-            );
-        }
-    }
-
-    // UDP sockets
-    if let Some(sockets) = crate::network::udp::get_sockets() {
-        for socket in sockets {
-            println!("udp   {}:{:<16} *:*",
-                socket.local_addr(),
-                socket.local_port()
-            );
+    if let Ok(sockets) = SOCKETS.lock() {
+        for (id, socket) in sockets.iter() {
+            if let Ok(socket) = socket.lock() {
+                println!("Socket {}: {:?}", id, socket.state);
+            }
         }
     }
 }
 
 pub fn route_print() {
-    println!("Network Destination        Gateway             Netmask             Interface");
-    
-    if let Some(interface) = &*crate::network::NETWORK_INTERFACE.lock() {
-        let addr = interface.ip_address();
-        let netmask = IpAddress::new([255, 255, 255, 0]); // Assuming /24 network
-        let gateway = IpAddress::new([192, 168, 1, 1]); // Default gateway
-
-        // Local network route
-        println!("{:<24} {:<19} {:<19} {}",
-            format!("{}", addr),
-            "0.0.0.0",
-            format!("{}", netmask),
-            format!("{}", addr)
-        );
-
-        // Default route
-        println!("{:<24} {:<19} {:<19} {}",
-            "0.0.0.0",
-            format!("{}", gateway),
-            "0.0.0.0",
-            format!("{}", addr)
-        );
+    if let Ok(sockets) = SOCKETS.lock() {
+        for (id, socket) in sockets.iter() {
+            if let Ok(socket) = socket.lock() {
+                println!("Socket {}: {}", id, socket.local_addr());
+            }
+        }
     }
-} 
+}
+
+pub fn check_sockets() -> Result<(), &'static str> {
+    let sockets = SOCKETS.lock();
+    for socket in sockets.values() {
+        // Process socket
+    }
+    Ok(())
+}

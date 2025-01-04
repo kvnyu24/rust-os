@@ -94,11 +94,11 @@ impl IpPacket {
         
         // Parse source IP
         ip_bytes.copy_from_slice(&data[12..16]);
-        let source = IpAddress::new(ip_bytes);
+        let source = IpAddress { octets: ip_bytes };
 
         // Parse destination IP
         ip_bytes.copy_from_slice(&data[16..20]);
-        let destination = IpAddress::new(ip_bytes);
+        let destination = IpAddress { octets: ip_bytes };
 
         // Get payload
         let payload = data[IP_HEADER_LEN..].to_vec();
@@ -148,10 +148,10 @@ impl IpPacket {
         bytes.extend_from_slice(&[0, 0]);
 
         // Source IP
-        bytes.extend_from_slice(self.source.as_bytes());
+        bytes.extend_from_slice(&self.source.octets);
 
         // Destination IP
-        bytes.extend_from_slice(self.destination.as_bytes());
+        bytes.extend_from_slice(&self.destination.octets);
 
         // Calculate checksum
         self.checksum = self.calculate_checksum(&bytes);
@@ -195,4 +195,4 @@ impl IpPacket {
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-} 
+}

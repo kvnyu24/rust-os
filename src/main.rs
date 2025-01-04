@@ -8,6 +8,17 @@
 
 extern crate alloc;
 
+use alloc::string::{String, ToString};
+use bootloader::BootInfo;
+use core::panic::PanicInfo;
+use x86_64::VirtAddr;
+use task::sync::Semaphore;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use futures_util::{StreamExt, FutureExt};
+use memory::heap::init_heap;
+use lazy_static::lazy_static;
+use pc_keyboard::KeyCode;
+
 mod vga_buffer;
 mod gdt;
 mod interrupts;
@@ -18,16 +29,6 @@ mod fs;
 mod process;
 mod shell;
 mod network;
-
-use bootloader::BootInfo;
-use core::panic::PanicInfo;
-use x86_64::VirtAddr;
-use task::sync::Semaphore;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use futures_util::{StreamExt, FutureExt};
-use memory::heap::init_heap;
-use lazy_static::lazy_static;
-use alloc::string::String;
 
 lazy_static! {
     pub static ref PRINT_SEMAPHORE: Semaphore = {
@@ -204,14 +205,14 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                 },
                 keyboard::KeyEvent::SpecialKey(key) => {
                     match key {
-                        keyboard::SpecialKey::Backspace => {
+                        KeyCode::Backspace => {
                             if !current_line.is_empty() {
                                 current_line.pop();
                                 print!("\x08 \x08");  // Backspace, space, backspace
                             }
                             shell.reset_tab_completion();  // Reset tab completion on backspace
                         },
-                        keyboard::SpecialKey::Tab => {
+                        KeyCode::Tab => {
                             if let Some(completed) = shell.tab_complete(&current_line) {
                                 // Clear current line
                                 while !current_line.is_empty() {
@@ -223,7 +224,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                                 current_line = completed;
                             }
                         },
-                        keyboard::SpecialKey::UpArrow => {
+                        KeyCode::ArrowUp => {
                             // Clear current line
                             while !current_line.is_empty() {
                                 print!("\x08 \x08");
@@ -237,7 +238,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                             }
                             shell.reset_tab_completion();
                         },
-                        keyboard::SpecialKey::DownArrow => {
+                        KeyCode::ArrowDown => {
                             // Clear current line
                             while !current_line.is_empty() {
                                 print!("\x08 \x08");

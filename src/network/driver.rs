@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
 use spin::Mutex;
-use x86_64::instructions::port::Port;
+use x86_64::instructions::port::{Port, PortReadAccess, PortWriteAccess};
 use crate::network::{MacAddress, NETWORK_INTERFACE};
+use alloc::boxed::Box;
+use lazy_static::lazy_static;
 
 pub trait NetworkDriver: Send {
     fn init(&mut self) -> Result<(), &'static str>;
@@ -111,7 +113,7 @@ impl NetworkDriver for Rtl8139 {
             }
 
             // Read packet size and data
-            let mut size_port = Port::new(self.io_base + 0x30);
+            let mut size_port: Port<u16> = Port::new(self.io_base + 0x30);
             let size = size_port.read() as usize;
 
             if size == 0 {
@@ -137,7 +139,7 @@ impl NetworkDriver for Rtl8139 {
 }
 
 lazy_static! {
-    pub static ref NETWORK_DRIVER: Mutex<Option<Box<dyn NetworkDriver>>> = Mutex::new(None);
+    pub static ref NETWORK_DRIVER: Mutex<Option<Box<dyn NetworkDriver + Send>>> = Mutex::new(None);
 }
 
 pub fn init() -> Result<(), &'static str> {

@@ -1,11 +1,43 @@
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::string::ToString;
+use alloc::boxed::Box;
 use alloc::format;
-use core::cmp::min;
-use crate::println;
-use crate::fs;
+use alloc::borrow::ToOwned;
+use crate::fs::{self, Filesystem, FsError};
 use crate::vga_buffer;
+use crate::print;
+use crate::println;
+use core::fmt;
+
+impl fmt::Display for FsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+pub trait FilesystemExt: Filesystem {
+    fn read_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
+        self.list_directory(path)
+    }
+
+    fn read_file(&self, path: &str) -> Result<Vec<u8>, FsError> {
+        self.read(path)
+    }
+
+    fn canonicalize_path(&self, base: &str, path: &str) -> Result<String, FsError> {
+        if path.starts_with('/') {
+            Ok(path.to_string())
+        } else {
+            Ok(format!("{}/{}", base.trim_end_matches('/'), path))
+        }
+    }
+
+    fn is_dir(&self, path: &str) -> bool {
+        self.list_directory(path).is_ok()
+    }
+}
+
+impl<T: ?Sized + Filesystem> FilesystemExt for T {}
 
 #[derive(Debug)]
 pub enum Redirection {
@@ -48,9 +80,9 @@ impl Command {
                     }
                     if chars.peek() == Some(&'>') {
                         chars.next(); // consume second '>'
-                        parts.push(">>".to_string());
+                        parts.push(">>".to_owned());
                     } else {
-                        parts.push(">".to_string());
+                        parts.push(">".to_owned());
                     }
                 }
                 '<' => {
@@ -58,14 +90,14 @@ impl Command {
                         parts.push(current_part);
                         current_part = String::new();
                     }
-                    parts.push("<".to_string());
+                    parts.push("<".to_owned());
                 }
                 '|' => {
                     if !current_part.is_empty() {
                         parts.push(current_part);
                         current_part = String::new();
                     }
-                    parts.push("|".to_string());
+                    parts.push("|".to_owned());
                 }
                 _ => current_part.push(c),
             }
@@ -167,7 +199,7 @@ pub struct Shell {
 impl Shell {
     pub fn new() -> Self {
         Shell {
-            current_dir: "/".to_string(),
+            current_dir: "/".to_owned(),
             command_history: Vec::new(),
             history_position: None,
             tab_completions: Vec::new(),
@@ -225,7 +257,7 @@ impl Shell {
             // Complete commands
             for cmd in ["ls", "cd", "pwd", "help", "clear", "cat", "mkdir", "touch", "rm", "echo", "cp", "mv"] {
                 if cmd.starts_with(prefix) {
-                    self.tab_completions.push(cmd.to_string());
+                    self.tab_completions.push(cmd.to_owned());
                 }
             }
         } else {
@@ -257,10 +289,11 @@ impl Shell {
 
     fn split_path(&self, path: &str) -> (String, &str) {
         if let Some(last_slash) = path.rfind('/') {
-            (path[..last_slash].to_string(), &path[last_slash + 1..])
+            (path[..last_slash].to_owned(), &path[last_slash + 1..])
         } else {
             (String::new(), path)
         }
+
     }
 
     // Add new file operations
@@ -307,7 +340,7 @@ impl Shell {
                     return;
                 }
                 // Remove the source file
-                if let Err(e) = fs.remove_file(&src_path) {
+                if let Err(e) = fs.remove(&src_path) {
                     println!("mv: error removing source file {}: {}", args[0], e);
                 }
             }
@@ -334,23 +367,6 @@ impl Shell {
             Redirection::Pipe(_) => input,
             _ => None,
         };
-
-        // Override print macros to capture output
-        macro_rules! print {
-            ($($arg:tt)*) => ({
-                let s = format!($($arg)*);
-                output_buffer.extend(s.as_bytes());
-            });
-        }
-        macro_rules! println {
-            () => ({
-                output_buffer.extend(b"\n");
-            });
-            ($($arg:tt)*) => ({
-                print!($($arg)*);
-                output_buffer.extend(b"\n");
-            });
-        }
 
         // Execute the command
         match command.name.as_str() {
@@ -388,7 +404,7 @@ impl Shell {
         }
 
         // Add command to history
-        self.command_history.push(input.to_string());
+        self.command_history.push(input.to_owned());
         self.history_position = None;
 
         let command = match Command::new(input) {
@@ -500,7 +516,7 @@ impl Shell {
     fn resolve_path(&self, path: &str) -> String {
         let fs = fs::ROOT_FS.read();
         fs.canonicalize_path(&self.current_dir, path)
-            .unwrap_or_else(|_| path.to_string())
+            .unwrap_or_else(|_| path.to_owned())
     }
 
     // Existing commands...
@@ -600,7 +616,7 @@ impl Shell {
         let fs = fs::ROOT_FS.read();
         for path in args {
             let full_path = self.resolve_path(path);
-            if let Err(e) = fs.remove_file(&full_path) {
+            if let Err(e) = fs.remove(&full_path) {
                 println!("rm: {}: {}", path, e);
             }
         }
@@ -616,7 +632,8 @@ impl Shell {
     }
 
     fn cmd_clear(&self) {
-        vga_buffer::WRITER.lock().clear_screen();
+        let mut writer = vga_buffer::WRITER.lock();
+        writer.clear();
     }
 }
 

@@ -75,10 +75,10 @@ impl EthernetFrame {
         let mut bytes = Vec::with_capacity(ETHERNET_HEADER_LEN + self.payload.len());
 
         // Add destination MAC
-        bytes.extend_from_slice(self.destination.as_bytes());
+        bytes.extend_from_slice(&self.destination.octets());
 
         // Add source MAC
-        bytes.extend_from_slice(self.source.as_bytes());
+        bytes.extend_from_slice(&self.source.octets());
 
         // Add EtherType
         bytes.extend_from_slice(&(self.ethertype as u16).to_be_bytes());
@@ -94,12 +94,12 @@ impl EthernetFrame {
         bytes
     }
 
-    pub fn destination(&self) -> MacAddress {
-        self.destination
+    pub fn destination(&self) -> &MacAddress {
+        &self.destination
     }
 
-    pub fn source(&self) -> MacAddress {
-        self.source
+    pub fn source(&self) -> &MacAddress {
+        &self.source
     }
 
     pub fn ethertype(&self) -> EtherType {
@@ -109,4 +109,4 @@ impl EthernetFrame {
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-} 
+}

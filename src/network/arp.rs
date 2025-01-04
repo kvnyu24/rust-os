@@ -130,12 +130,12 @@ impl ArpPacket {
         bytes.extend_from_slice(&(self.operation as u16).to_be_bytes());
 
         // Sender MAC and IP
-        bytes.extend_from_slice(self.sender_mac.as_bytes());
-        bytes.extend_from_slice(self.sender_ip.as_bytes());
+        bytes.extend_from_slice(&self.sender_mac.0);
+        bytes.extend_from_slice(&self.sender_ip.octets);
 
         // Target MAC and IP
-        bytes.extend_from_slice(self.target_mac.as_bytes());
-        bytes.extend_from_slice(self.target_ip.as_bytes());
+        bytes.extend_from_slice(&self.target_mac.0);
+        bytes.extend_from_slice(&self.target_ip.octets);
 
         bytes
     }
@@ -160,18 +160,18 @@ pub fn handle_arp_packet(packet: ArpPacket) {
 
 fn handle_arp_request(packet: ArpPacket) {
     if let Some(interface) = &*NETWORK_INTERFACE.lock() {
-        if packet.target_ip == interface.ip_address() {
+        if packet.target_ip == interface.ip_address {
             // Send ARP reply
             let reply = ArpPacket::new_reply(
-                interface.mac_address(),
-                interface.ip_address(),
+                interface.mac_address,
+                interface.ip_address,
                 packet.sender_mac,
                 packet.sender_ip,
             );
 
             let frame = EthernetFrame::new(
                 packet.sender_mac,
-                interface.mac_address(),
+                interface.mac_address,
                 EtherType::Arp,
                 reply.to_bytes(),
             );
@@ -204,14 +204,14 @@ pub fn get_mac_address(ip: IpAddress) -> Option<MacAddress> {
     // Send ARP request
     if let Some(interface) = &*NETWORK_INTERFACE.lock() {
         let request = ArpPacket::new_request(
-            interface.mac_address(),
-            interface.ip_address(),
+            interface.mac_address,
+            interface.ip_address,
             ip,
         );
 
         let frame = EthernetFrame::new(
             MacAddress::new([0xFF; 6]),  // Broadcast
-            interface.mac_address(),
+            interface.mac_address,
             EtherType::Arp,
             request.to_bytes(),
         );
@@ -227,4 +227,4 @@ pub fn get_mac_address(ip: IpAddress) -> Option<MacAddress> {
 // TODO: Implement proper time source
 fn get_current_time() -> u64 {
     0  // Placeholder, should return system time in seconds
-} 
+}

@@ -3,16 +3,18 @@ use alloc::collections::BTreeMap;
 use spin::Mutex;
 use lazy_static::lazy_static;
 use crate::network::{IpAddress, ip::{IpPacket, IpProtocol}};
+use alloc::boxed::Box;
+use alloc::string::ToString;
 
 const UDP_HEADER_LEN: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct UdpPacket {
-    source_port: u16,
-    destination_port: u16,
+    pub(crate) source_port: u16,
+    pub(crate) destination_port: u16,
     length: u16,
     checksum: u16,
-    payload: Vec<u8>,
+    pub(crate) payload: Vec<u8>,
 }
 
 impl UdpPacket {
@@ -70,10 +72,10 @@ impl UdpPacket {
         let mut sum: u32 = 0;
 
         // Add source and destination IPs
-        for byte in source_ip.as_bytes().chunks_exact(2) {
+        for byte in source_ip.octets.chunks_exact(2) {
             sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
         }
-        for byte in dest_ip.as_bytes().chunks_exact(2) {
+        for byte in dest_ip.octets.chunks_exact(2) {
             sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
         }
 
@@ -123,7 +125,9 @@ pub fn bind(port: PortNumber, callback: UdpCallback) -> Result<(), &'static str>
 }
 
 pub fn unbind(port: PortNumber) {
-    UDP_SOCKETS.lock().remove(&port);
+    if let Some(mut sockets) = UDP_SOCKETS.try_lock() {
+        sockets.remove(&port);
+    }
 }
 
 pub fn send(
@@ -137,7 +141,7 @@ pub fn send(
         .lock()
         .as_ref()
         .ok_or("Network interface not initialized")?
-        .ip_address();
+        .ip_address;
 
     packet.calculate_checksum(source_ip, destination_ip);
     
@@ -148,18 +152,19 @@ pub fn send(
         packet.to_bytes(),
     );
 
-    let packet_bytes = ip_packet.to_bytes();
-    crate::network::NETWORK_INTERFACE
-        .lock()
-        .as_mut()
-        .ok_or("Network interface not initialized")?
-        .send(&packet_bytes);
+    if let Some(driver) = &mut *crate::network::driver::NETWORK_DRIVER.lock() {
+        driver.send(&ip_packet.to_bytes())?;
+    } else {
+        return Err("Network driver not initialized");
+    }
 
     Ok(())
 }
 
 pub fn handle_udp_packet(packet: UdpPacket, source_ip: IpAddress) {
-    if let Some(callback) = UDP_SOCKETS.lock().get(&packet.destination_port) {
-        callback(&packet.payload, source_ip, packet.source_port);
+    if let Some(sockets) = UDP_SOCKETS.try_lock() {
+        if let Some(callback) = sockets.get(&packet.destination_port) {
+            callback(&packet.payload, source_ip, packet.source_port);
+        }
     }
 }

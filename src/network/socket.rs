@@ -5,6 +5,8 @@ use spin::Mutex;
 use lazy_static::lazy_static;
 use core::sync::atomic::AtomicU32;
 use crate::network::{IpAddress, tcp, udp};
+use alloc::string::ToString;
+use crate::time;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketType {
@@ -40,17 +42,17 @@ lazy_static! {
 }
 
 impl Socket {
-    pub fn new(socket_type: SocketType) -> Self {
-        Socket {
-            socket_type,
+    pub fn new(local_addr: IpAddress) -> Result<Self, &'static str> {
+        Ok(Socket {
+            socket_type: SocketType::Dgram,
             state: SocketState::Closed,
-            local_addr: IpAddress::new([0, 0, 0, 0]),
+            local_addr,
             local_port: 0,
             remote_addr: None,
             remote_port: None,
             receive_buffer: Vec::new(),
             tcp_connection: None,
-        }
+        })
     }
 
     pub fn bind(&mut self, addr: IpAddress, port: u16) -> Result<(), &'static str> {
@@ -98,7 +100,7 @@ impl Socket {
         }
 
         if let Some(conn) = &mut self.tcp_connection {
-            conn.listen()?;
+            conn.start_listen()?;
             self.state = SocketState::Listening;
             Ok(())
         } else {
@@ -162,7 +164,7 @@ impl Socket {
         }
     }
 
-    pub fn sendto(&mut self, data: &[u8], addr: IpAddress, port: u16) -> Result<usize, &'static str> {
+    pub fn send_to(&mut self, data: &[u8], addr: IpAddress, port: u16) -> Result<usize, &'static str> {
         if self.socket_type != SocketType::Dgram {
             return Err("Operation not supported for TCP sockets");
         }
@@ -171,15 +173,27 @@ impl Socket {
         Ok(data.len())
     }
 
-    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, &'static str> {
-        if self.receive_buffer.is_empty() {
-            return Ok(0);
+    pub fn recv_from(&mut self, buffer: &mut [u8], timeout: core::time::Duration) -> Result<(usize, IpAddress, u16), &'static str> {
+        if self.socket_type != SocketType::Dgram {
+            return Err("Operation not supported for TCP sockets");
+        }
+
+        // Wait for data with timeout
+        let start = time::get_timestamp();
+        while self.receive_buffer.is_empty() {
+            if time::get_timestamp().saturating_sub(start) > timeout.as_millis() as u64 {
+                return Err("Receive timeout");
+            }
+            // Yield to allow other tasks to run
+            crate::task::yield_now();
         }
 
         let len = core::cmp::min(buffer.len(), self.receive_buffer.len());
         buffer[..len].copy_from_slice(&self.receive_buffer[..len]);
         self.receive_buffer.drain(..len);
-        Ok(len)
+
+        // Return the size and remote address/port
+        Ok((len, self.remote_addr.unwrap_or(IpAddress::new([0, 0, 0, 0])), self.remote_port.unwrap_or(0)))
     }
 
     fn handle_udp_data(&mut self, data: &[u8], src_ip: IpAddress, src_port: u16) {
@@ -190,7 +204,7 @@ impl Socket {
 }
 
 pub fn socket(socket_type: SocketType) -> Result<SocketId, &'static str> {
-    let socket = Arc::new(Mutex::new(Socket::new(socket_type)));
+    let socket = Arc::new(Mutex::new(Socket::new(IpAddress::new([0, 0, 0, 0]))?));
     let id = NEXT_SOCKET_ID.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
     SOCKETS.lock().insert(id, socket);
     Ok(id)
@@ -228,17 +242,17 @@ pub fn send(socket_id: SocketId, data: &[u8]) -> Result<usize, &'static str> {
     }
 }
 
-pub fn sendto(socket_id: SocketId, data: &[u8], addr: IpAddress, port: u16) -> Result<usize, &'static str> {
+pub fn send_to(socket_id: SocketId, data: &[u8], addr: IpAddress, port: u16) -> Result<usize, &'static str> {
     if let Some(socket) = SOCKETS.lock().get(&socket_id) {
-        socket.lock().sendto(data, addr, port)
+        socket.lock().send_to(data, addr, port)
     } else {
         Err("Invalid socket")
     }
 }
 
-pub fn receive(socket_id: SocketId, buffer: &mut [u8]) -> Result<usize, &'static str> {
+pub fn recv_from(socket_id: SocketId, buffer: &mut [u8], timeout: core::time::Duration) -> Result<(usize, IpAddress, u16), &'static str> {
     if let Some(socket) = SOCKETS.lock().get(&socket_id) {
-        socket.lock().receive(buffer)
+        socket.lock().recv_from(buffer, timeout)
     } else {
         Err("Invalid socket")
     }
@@ -249,6 +263,14 @@ pub fn close(socket_id: SocketId) -> Result<(), &'static str> {
     Ok(())
 }
 
+pub fn receive(socket_id: SocketId, buffer: &mut [u8]) -> Result<(usize, IpAddress, u16), &'static str> {
+    if let Some(socket) = SOCKETS.lock().get(&socket_id) {
+        socket.lock().recv_from(buffer, Duration::from_secs(1))
+    } else {
+        Err("Invalid socket")
+    }
+}
+
 fn find_socket_by_port(port: u16) -> Option<Arc<Mutex<Socket>>> {
     for socket in SOCKETS.lock().values() {
         let socket_ref = socket.lock();
@@ -257,4 +279,4 @@ fn find_socket_by_port(port: u16) -> Option<Arc<Mutex<Socket>>> {
         }
     }
     None
-} 
+}

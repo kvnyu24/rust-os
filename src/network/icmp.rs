@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use alloc::string::ToString;
 use crate::network::{IpAddress, ip::{IpPacket, IpProtocol}};
 
 const ICMP_HEADER_LEN: usize = 8;
@@ -24,7 +25,7 @@ impl From<u8> for IcmpType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
 pub enum IcmpCode {
     // Destination Unreachable codes
@@ -32,13 +33,31 @@ pub enum IcmpCode {
     HostUnreachable = 1,
     ProtocolUnreachable = 2,
     PortUnreachable = 3,
+    FragmentationNeeded = 4,
+    SourceRouteFailed = 5,
 
     // Time Exceeded codes
-    TtlExceeded = 0,
-    FragmentReassemblyTimeExceeded = 1,
+    TtlExceeded = 11,
+    FragmentReassemblyTimeExceeded = 12,
 
-    // Default code for other types
-    Zero = 0,
+    // Echo Request/Reply codes
+    EchoCode = 8,
+}
+
+impl From<u8> for IcmpCode {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => IcmpCode::NetworkUnreachable,
+            1 => IcmpCode::HostUnreachable,
+            2 => IcmpCode::ProtocolUnreachable,
+            3 => IcmpCode::PortUnreachable,
+            4 => IcmpCode::FragmentationNeeded,
+            5 => IcmpCode::SourceRouteFailed,
+            11 => IcmpCode::TtlExceeded,
+            12 => IcmpCode::FragmentReassemblyTimeExceeded,
+            _ => IcmpCode::EchoCode,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -55,7 +74,7 @@ impl IcmpPacket {
         let rest_of_header = ((identifier as u32) << 16) | (sequence as u32);
         IcmpPacket {
             icmp_type: IcmpType::EchoRequest,
-            code: IcmpCode::Zero,
+            code: IcmpCode::EchoCode,
             checksum: 0,  // Will be calculated
             rest_of_header,
             payload,
@@ -66,7 +85,7 @@ impl IcmpPacket {
         let rest_of_header = ((identifier as u32) << 16) | (sequence as u32);
         IcmpPacket {
             icmp_type: IcmpType::EchoReply,
-            code: IcmpCode::Zero,
+            code: IcmpCode::EchoCode,
             checksum: 0,  // Will be calculated
             rest_of_header,
             payload,
@@ -96,7 +115,7 @@ impl IcmpPacket {
             0..=1 if icmp_type == IcmpType::TimeExceeded => {
                 unsafe { core::mem::transmute(data[1]) }
             }
-            _ => IcmpCode::Zero,
+            _ => IcmpCode::EchoCode,
         };
         let checksum = u16::from_be_bytes([data[2], data[3]]);
         let rest_of_header = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
@@ -162,6 +181,10 @@ impl IcmpPacket {
 
     pub fn get_sequence(&self) -> u16 {
         self.rest_of_header as u16
+    }
+
+    pub fn get_type(&self) -> IcmpType {
+        self.icmp_type
     }
 }
 
