@@ -181,11 +181,13 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                         shell.execute(&current_line);
                         current_line.clear();
                     }
+                    shell.reset_tab_completion();  // Reset tab completion state
                     print!("> ");  // Shell prompt
                 },
                 keyboard::KeyEvent::Char(c) => {
                     print!("{}", c);
                     current_line.push(c);
+                    shell.reset_tab_completion();  // Reset tab completion when typing
                 },
                 keyboard::KeyEvent::SpecialKey(key) => {
                     match key {
@@ -193,6 +195,19 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                             if !current_line.is_empty() {
                                 current_line.pop();
                                 print!("\x08 \x08");  // Backspace, space, backspace
+                            }
+                            shell.reset_tab_completion();  // Reset tab completion on backspace
+                        },
+                        keyboard::SpecialKey::Tab => {
+                            if let Some(completed) = shell.tab_complete(&current_line) {
+                                // Clear current line
+                                while !current_line.is_empty() {
+                                    print!("\x08 \x08");
+                                    current_line.pop();
+                                }
+                                // Print and set new line
+                                print!("{}", completed);
+                                current_line = completed;
                             }
                         },
                         keyboard::SpecialKey::UpArrow => {
@@ -207,6 +222,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                                 current_line = cmd.to_string();
                                 print!("{}", current_line);
                             }
+                            shell.reset_tab_completion();
                         },
                         keyboard::SpecialKey::DownArrow => {
                             // Clear current line
@@ -220,6 +236,7 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
                                 current_line = cmd.to_string();
                                 print!("{}", current_line);
                             }
+                            shell.reset_tab_completion();
                         },
                         _ => {}
                     }
