@@ -6,7 +6,7 @@ use crate::network::{IpAddress, ip::{IpPacket, IpProtocol}};
 
 const UDP_HEADER_LEN: usize = 8;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UdpPacket {
     source_port: u16,
     destination_port: u16,
@@ -22,7 +22,7 @@ impl UdpPacket {
             source_port,
             destination_port,
             length,
-            checksum: 0,  // Will be calculated
+            checksum: 0,  // Will be calculated later
             payload,
         }
     }
@@ -32,10 +32,16 @@ impl UdpPacket {
             return None;
         }
 
-        let source_port = u16::from_be_bytes([data[0], data[1]]);
-        let destination_port = u16::from_be_bytes([data[2], data[3]]);
-        let length = u16::from_be_bytes([data[4], data[5]]);
-        let checksum = u16::from_be_bytes([data[6], data[7]]);
+        let source_port = u16::from_be_bytes(data[0..2].try_into().ok()?);
+        let destination_port = u16::from_be_bytes(data[2..4].try_into().ok()?);
+        let length = u16::from_be_bytes(data[4..6].try_into().ok()?);
+        let checksum = u16::from_be_bytes(data[6..8].try_into().ok()?);
+
+        // Validate length
+        if data.len() != length as usize {
+            return None;
+        }
+
         let payload = data[UDP_HEADER_LEN..].to_vec();
 
         Some(UdpPacket {
@@ -47,63 +53,56 @@ impl UdpPacket {
         })
     }
 
-    pub fn to_bytes(&mut self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(UDP_HEADER_LEN + self.payload.len());
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.length as usize);
 
-        // Source port
         bytes.extend_from_slice(&self.source_port.to_be_bytes());
-
-        // Destination port
         bytes.extend_from_slice(&self.destination_port.to_be_bytes());
-
-        // Length
         bytes.extend_from_slice(&self.length.to_be_bytes());
-
-        // Checksum (initially 0)
-        bytes.extend_from_slice(&[0, 0]);
-
-        // Payload
+        bytes.extend_from_slice(&self.checksum.to_be_bytes());
         bytes.extend_from_slice(&self.payload);
 
         bytes
     }
 
     pub fn calculate_checksum(&mut self, source_ip: IpAddress, dest_ip: IpAddress) {
-        // UDP checksum includes a pseudo-header with IP addresses
+        self.checksum = 0;
         let mut sum: u32 = 0;
 
-        // Add source IP
-        for byte in source_ip.as_bytes().chunks(2) {
+        // Add source and destination IPs
+        for byte in source_ip.as_bytes().chunks_exact(2) {
+            sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
+        }
+        for byte in dest_ip.as_bytes().chunks_exact(2) {
             sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
         }
 
-        // Add destination IP
-        for byte in dest_ip.as_bytes().chunks(2) {
-            sum += u16::from_be_bytes([byte[0], byte[1]]) as u32;
-        }
-
-        // Add protocol number (17 for UDP) and UDP length
-        sum += 17u32;
-        sum += self.length as u32;
+        // Add protocol and length
+        sum += (IpProtocol::Udp as u32) + (self.length as u32);
 
         // Add UDP header and data
         let packet_bytes = self.to_bytes();
         for chunk in packet_bytes.chunks(2) {
-            let value = if chunk.len() == 2 {
-                u16::from_be_bytes([chunk[0], chunk[1]])
-            } else {
-                u16::from_be_bytes([chunk[0], 0])
-            } as u32;
+            let value = match chunk {
+                &[b1, b2] => u16::from_be_bytes([b1, b2]) as u32,
+                &[b1] => u16::from_be_bytes([b1, 0]) as u32,
+                _ => unreachable!(),
+            };
             sum += value;
         }
 
-        // Add carried bits
-        while (sum >> 16) != 0 {
+        // Fold carry bits
+        while sum > 0xFFFF {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
 
-        // One's complement
         self.checksum = !sum as u16;
+    }
+
+    pub fn verify_checksum(&self, source_ip: IpAddress, dest_ip: IpAddress) -> bool {
+        let mut packet = self.clone();
+        packet.calculate_checksum(source_ip, dest_ip);
+        self.checksum == packet.checksum
     }
 }
 
@@ -134,26 +133,33 @@ pub fn send(
     data: &[u8],
 ) -> Result<(), &'static str> {
     let mut packet = UdpPacket::new(source_port, destination_port, data.to_vec());
+    let source_ip = crate::network::NETWORK_INTERFACE
+        .lock()
+        .as_ref()
+        .ok_or("Network interface not initialized")?
+        .ip_address();
+
+    packet.calculate_checksum(source_ip, destination_ip);
     
-    // Create IP packet
     let mut ip_packet = IpPacket::new(
-        crate::network::NETWORK_INTERFACE.lock().as_ref().unwrap().ip_address(),
+        source_ip,
         destination_ip,
         IpProtocol::Udp,
         packet.to_bytes(),
     );
 
-    // Send through network interface
-    if let Some(interface) = &mut *crate::network::NETWORK_INTERFACE.lock() {
-        interface.send(&ip_packet.to_bytes());
-        Ok(())
-    } else {
-        Err("Network interface not initialized")
-    }
+    let packet_bytes = ip_packet.to_bytes();
+    crate::network::NETWORK_INTERFACE
+        .lock()
+        .as_mut()
+        .ok_or("Network interface not initialized")?
+        .send(&packet_bytes);
+
+    Ok(())
 }
 
 pub fn handle_udp_packet(packet: UdpPacket, source_ip: IpAddress) {
     if let Some(callback) = UDP_SOCKETS.lock().get(&packet.destination_port) {
         callback(&packet.payload, source_ip, packet.source_port);
     }
-} 
+}
