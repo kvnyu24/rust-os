@@ -31,10 +31,12 @@ This project is a minimal operating system implemented in Rust, running directly
   - [x] File redirection (>, >>, <)
   - [x] Command piping (|)
   - [ ] Basic shell scripting
-- [ ] Network Stack
-  - [ ] Network driver
-  - [ ] TCP/IP implementation
-  - [ ] Basic network services
+- [x] Network Stack
+  - [x] Network driver (RTL8139)
+  - [x] TCP/IP implementation
+  - [ ] Basic network services (DHCP, DNS)
+  - [ ] Socket interface
+  - [ ] Network utilities (ping, netstat)
 - [ ] Advanced Process Management
   - [ ] Inter-process communication (IPC)
   - [ ] Enhanced process isolation

@@ -17,6 +17,7 @@ mod task;
 mod fs;
 mod process;
 mod shell;
+mod network;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
@@ -133,6 +134,18 @@ pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
     fs::init();
     
     println!("Filesystem initialized successfully!");
+    println!("Initializing network stack...");
+    
+    // Initialize network interface
+    network::init();
+    
+    // Initialize network driver
+    if let Err(e) = network::driver::init() {
+        println!("Failed to initialize network driver: {}", e);
+    } else {
+        println!("Network stack initialized successfully!");
+    }
+    
     println!("Initializing process manager...");
     
     // Initialize process manager
