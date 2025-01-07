@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
-use alloc::string::ToString;
-use crate::network::{IpAddress, ip::{IpPacket, IpProtocol}};
+use crate::network::IpAddress;
+use crate::println;
+use crate::network::ip::{IpProtocol, IpPacket};
 
 const ICMP_HEADER_LEN: usize = 8;
 

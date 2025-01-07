@@ -1,12 +1,16 @@
-use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
+use alloc::boxed::Box;
+use alloc::collections::btree_map::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::time::Duration;
 use spin::Mutex;
 use lazy_static::lazy_static;
-use core::sync::atomic::AtomicU32;
-use crate::network::{IpAddress, tcp, udp};
+use crate::network::IpAddress;
+use crate::network::{tcp, udp};
 use alloc::string::ToString;
-use crate::time;
+use core::time;
+use core::sync::atomic::{AtomicU32, Ordering};
+use crate::network::utils::get_timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketType {
@@ -24,6 +28,7 @@ pub enum SocketState {
 
 #[derive(Debug)]
 pub struct Socket {
+    pub id: SocketId,
     socket_type: SocketType,
     state: SocketState,
     local_addr: IpAddress,
@@ -38,15 +43,16 @@ type SocketId = u32;
 static NEXT_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
 
 lazy_static! {
-    static ref SOCKETS: Mutex<BTreeMap<SocketId, Arc<Mutex<Socket>>>> = Mutex::new(BTreeMap::new());
+    pub static ref SOCKETS: Mutex<BTreeMap<SocketId, Arc<Mutex<Socket>>>> = Mutex::new(BTreeMap::new());
 }
 
 impl Socket {
-    pub fn new(local_addr: IpAddress) -> Result<Self, &'static str> {
+    pub fn new(socket_type: SocketType) -> Result<Self, &'static str> {
         Ok(Socket {
-            socket_type: SocketType::Dgram,
+            id: NEXT_SOCKET_ID.fetch_add(1, Ordering::SeqCst),
+            socket_type,
             state: SocketState::Closed,
-            local_addr,
+            local_addr: IpAddress::new([0, 0, 0, 0]),
             local_port: 0,
             remote_addr: None,
             remote_port: None,
@@ -179,9 +185,9 @@ impl Socket {
         }
 
         // Wait for data with timeout
-        let start = time::get_timestamp();
+        let start = get_timestamp();
         while self.receive_buffer.is_empty() {
-            if time::get_timestamp().saturating_sub(start) > timeout.as_millis() as u64 {
+            if get_timestamp().saturating_sub(start) > timeout.as_millis() as u64 {
                 return Err("Receive timeout");
             }
             // Yield to allow other tasks to run
@@ -204,7 +210,7 @@ impl Socket {
 }
 
 pub fn socket(socket_type: SocketType) -> Result<SocketId, &'static str> {
-    let socket = Arc::new(Mutex::new(Socket::new(IpAddress::new([0, 0, 0, 0]))?));
+    let socket = Arc::new(Mutex::new(Socket::new(socket_type)?));
     let id = NEXT_SOCKET_ID.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
     SOCKETS.lock().insert(id, socket);
     Ok(id)
@@ -252,7 +258,23 @@ pub fn send_to(socket_id: SocketId, data: &[u8], addr: IpAddress, port: u16) -> 
 
 pub fn recv_from(socket_id: SocketId, buffer: &mut [u8], timeout: core::time::Duration) -> Result<(usize, IpAddress, u16), &'static str> {
     if let Some(socket) = SOCKETS.lock().get(&socket_id) {
-        socket.lock().recv_from(buffer, timeout)
+        let mut socket = socket.lock();
+        // Wait for data with timeout
+        let start = get_timestamp();
+        while socket.receive_buffer.is_empty() {
+            if get_timestamp().saturating_sub(start) > timeout.as_millis() as u64 {
+                return Err("Receive timeout");
+            }
+            // Yield to allow other tasks to run
+            crate::task::yield_now();
+        }
+
+        let len = core::cmp::min(buffer.len(), socket.receive_buffer.len());
+        buffer[..len].copy_from_slice(&socket.receive_buffer[..len]);
+        socket.receive_buffer.drain(..len);
+
+        // Return the size and remote address/port
+        Ok((len, socket.remote_addr.unwrap_or(IpAddress::new([0, 0, 0, 0])), socket.remote_port.unwrap_or(0)))
     } else {
         Err("Invalid socket")
     }

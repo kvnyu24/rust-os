@@ -109,21 +109,19 @@ pub fn ping(dest_ip: IpAddress, count: u32) -> Result<PingStatistics, &'static s
 }
 
 pub fn netstat() {
-    if let Ok(sockets) = SOCKETS.lock() {
-        for (id, socket) in sockets.iter() {
-            if let Ok(socket) = socket.lock() {
-                println!("Socket {}: {:?}", id, socket.state);
-            }
+    let sockets = SOCKETS.lock();
+    for (id, socket) in sockets.iter() {
+        if let Some(guard) = socket.try_lock() {
+            println!("Socket {}: {:?}", id, guard.state);
         }
     }
 }
 
 pub fn route_print() {
-    if let Ok(sockets) = SOCKETS.lock() {
-        for (id, socket) in sockets.iter() {
-            if let Ok(socket) = socket.lock() {
-                println!("Socket {}: {}", id, socket.local_addr());
-            }
+    let sockets = SOCKETS.lock();
+    for (id, socket) in sockets.iter() {
+        if let Some(guard) = socket.try_lock() {
+            println!("Socket {}: {}", id, guard.local_addr());
         }
     }
 }

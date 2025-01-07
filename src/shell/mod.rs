@@ -15,7 +15,14 @@ impl fmt::Display for FsError {
     }
 }
 
-pub trait FilesystemExt: Filesystem {
+pub trait FilesystemExt {
+    fn read_dir(&self, path: &str) -> Result<Vec<String>, FsError>;
+    fn read_file(&self, path: &str) -> Result<Vec<u8>, FsError>;
+    fn canonicalize_path(&self, base: &str, path: &str) -> Result<String, FsError>;
+    fn is_dir(&self, path: &str) -> bool;
+}
+
+impl<T: ?Sized + Filesystem> FilesystemExt for T {
     fn read_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
         self.list_directory(path)
     }
@@ -36,8 +43,6 @@ pub trait FilesystemExt: Filesystem {
         self.list_directory(path).is_ok()
     }
 }
-
-impl<T: ?Sized + Filesystem> FilesystemExt for T {}
 
 #[derive(Debug)]
 pub enum Redirection {

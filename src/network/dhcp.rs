@@ -273,7 +273,7 @@ impl NetworkInterface {
 }
 
 pub fn handle_dhcp_packet(udp_packet: &UdpPacket, interface: &mut NetworkInterface) -> Result<(), &'static str> {
-    if let Some(dhcp_packet) = DhcpPacket::parse(&udp_packet.data) {
+    if let Some(dhcp_packet) = DhcpPacket::parse(&udp_packet.payload) {
         match dhcp_packet.get_message_type() {
             DhcpMessageType::Offer => {
                 // Send DHCP Request

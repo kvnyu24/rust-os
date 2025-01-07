@@ -1,7 +1,9 @@
+use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::string::{String, ToString};
-use core::convert::TryInto;
-use crate::network::{IpAddress, udp};
+use crate::network::socket::{Socket, send_to, recv_from, SocketType};
+use crate::network::IpAddress;
+use core::time::Duration;
 
 const DNS_PORT: u16 = 53;
 
@@ -70,13 +72,14 @@ impl DnsResolver {
         packet.extend_from_slice(&1u16.to_be_bytes());
         packet.extend_from_slice(&1u16.to_be_bytes());
 
-        // Send query
-        let socket = udp::Socket::new()?;
-        socket.send_to(&packet, self.server, DNS_PORT)?;
+        // Create socket and get ID
+        let socket = Socket::new(SocketType::Udp)?;
+        let socket_id = socket.id;
+        send_to(socket_id, &packet, self.server, DNS_PORT)?;
 
         // Receive response
-        let mut response = vec![0; 512];
-        let (size, _) = socket.recv_from(&mut response)?;
+        let mut response = vec![0u8; 512];
+        let (size, _, _) = recv_from(socket_id, &mut response, Duration::from_secs(5))?;
         response.truncate(size);
 
         // Parse response
@@ -168,4 +171,4 @@ impl DnsResolver {
 pub fn resolve_hostname(hostname: &str) -> Result<IpAddress, &'static str> {
     let mut resolver = DnsResolver::new(IpAddress::new([8, 8, 8, 8])); // Google DNS
     resolver.resolve(hostname)
-} 
+}
