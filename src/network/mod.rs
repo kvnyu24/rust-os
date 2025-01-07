@@ -175,7 +175,7 @@ impl NetworkInterface {
         self.tx_buffer.clear();
     }
 
-    pub fn send_ip(&mut self, packet: &ip::IpPacket) -> Result<(), &'static str> {
+    pub fn send_ip(&mut self, packet: &mut ip::IpPacket) -> Result<(), &'static str> {
         let dest_mac = if packet.destination().octets[0] == 255 {
             MacAddress::new([0xFF; 6]) // Broadcast
         } else if let Some(mac) = arp::get_mac_address(packet.destination()) {
@@ -184,17 +184,19 @@ impl NetworkInterface {
             return Err("Could not resolve MAC address");
         };
 
+        let packet_bytes = packet.to_bytes();
         let frame = ethernet::EthernetFrame::new(
             dest_mac,
             self.mac_address,
             ethernet::EtherType::Ipv4,
-            packet.to_bytes(),
+            packet_bytes,
         );
 
-        self.tx_buffer.clear();
-        self.tx_buffer.extend_from_slice(&frame.to_bytes());
-        self.process_tx_buffer();
-        Ok(())
+        if let Some(driver) = &mut *NETWORK_DRIVER.lock() {
+            driver.send(&frame.to_bytes())
+        } else {
+            Err("Network driver not initialized")
+        }
     }
 
     pub fn configure(&mut self, ip: IpAddress, netmask: IpAddress, gateway: IpAddress) {

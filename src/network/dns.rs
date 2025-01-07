@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::network::socket::{Socket, send_to, recv_from, SocketType};
+use crate::network::socket::{Socket, send_to, recv_from, SocketType, SocketId};
 use crate::network::IpAddress;
 use core::time::Duration;
 
@@ -73,7 +73,7 @@ impl DnsResolver {
         packet.extend_from_slice(&1u16.to_be_bytes());
 
         // Create socket and get ID
-        let socket = Socket::new(SocketType::Udp)?;
+        let socket = Socket::new(SocketType::Dgram)?;
         let socket_id = socket.id;
         send_to(socket_id, &packet, self.server, DNS_PORT)?;
 

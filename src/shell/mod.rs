@@ -24,11 +24,20 @@ pub trait FilesystemExt {
 
 impl<T: ?Sized + Filesystem> FilesystemExt for T {
     fn read_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
-        self.list_directory(path)
+        if let Ok(dir) = self.get_dir(path) {
+            if let Ok(entries) = dir.list() {
+                return Ok(entries.into_iter().map(|(name, _)| name).collect());
+            }
+        }
+        Err(FsError::NotFound)
     }
 
     fn read_file(&self, path: &str) -> Result<Vec<u8>, FsError> {
-        self.read(path)
+        if let Ok(file) = self.get_file(path) {
+            file.read()
+        } else {
+            Err(FsError::NotFound)
+        }
     }
 
     fn canonicalize_path(&self, base: &str, path: &str) -> Result<String, FsError> {
@@ -40,7 +49,7 @@ impl<T: ?Sized + Filesystem> FilesystemExt for T {
     }
 
     fn is_dir(&self, path: &str) -> bool {
-        self.list_directory(path).is_ok()
+        self.get_dir(path).is_ok()
     }
 }
 
@@ -268,6 +277,7 @@ impl Shell {
         } else {
             // Complete paths
             let (dir_path, file_prefix) = self.split_path(path_to_complete);
+            let file_prefix = file_prefix.to_string();
             let search_dir = if dir_path.is_empty() {
                 self.current_dir.clone()
             } else {
@@ -277,7 +287,7 @@ impl Shell {
             let fs = fs::ROOT_FS.read();
             if let Ok(entries) = fs.read_dir(&search_dir) {
                 for entry in entries {
-                    if entry.starts_with(file_prefix) {
+                    if entry.starts_with(&file_prefix) {
                         let full_path = if dir_path.is_empty() {
                             entry
                         } else {
@@ -292,13 +302,12 @@ impl Shell {
         self.tab_completions.sort();
     }
 
-    fn split_path(&self, path: &str) -> (String, &str) {
+    fn split_path<'a>(&'a self, path: &'a str) -> (String, &'a str) {
         if let Some(last_slash) = path.rfind('/') {
             (path[..last_slash].to_owned(), &path[last_slash + 1..])
         } else {
             (String::new(), path)
         }
-
     }
 
     // Add new file operations
@@ -354,7 +363,7 @@ impl Shell {
     }
 
     // Add execute_command method to handle single command execution
-    fn execute_command(&self, command: &Command, input: Option<Vec<u8>>) -> Vec<u8> {
+    fn execute_command(&mut self, command: &Command, input: Option<Vec<u8>>) -> Vec<u8> {
         let mut output_buffer = Vec::new();
 
         // Handle input redirection
@@ -450,7 +459,7 @@ impl Shell {
     }
 
     // Add execute_pipeline method to handle command pipelines
-    fn execute_pipeline(&self, command: &Command) -> Vec<u8> {
+    fn execute_pipeline(&mut self, command: &Command) -> Vec<u8> {
         match &command.input_redirect {
             Redirection::Pipe(prev_command) => {
                 // Execute the previous command and use its output as input
@@ -644,4 +653,4 @@ impl Shell {
 
 pub fn init() -> Shell {
     Shell::new()
-} 
+}

@@ -39,7 +39,7 @@ pub struct Socket {
     tcp_connection: Option<tcp::TcpConnection>,
 }
 
-type SocketId = u32;
+pub type SocketId = u32;
 static NEXT_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
 
 lazy_static! {
@@ -206,6 +206,14 @@ impl Socket {
         if self.remote_addr.is_none() || self.remote_addr == Some(src_ip) {
             self.receive_buffer.extend_from_slice(data);
         }
+    }
+
+    pub fn local_addr(&self) -> IpAddress {
+        self.local_addr
+    }
+
+    pub fn state(&self) -> SocketState {
+        self.state
     }
 }
 

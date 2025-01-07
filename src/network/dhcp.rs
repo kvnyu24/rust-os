@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use crate::network::prelude::*;
 use crate::network::{IpAddress, NetworkInterface};
-use crate::network::socket::Socket;
+use crate::network::socket::{Socket, SocketType};
 use crate::network::udp::UdpPacket;
 use core::time::Duration;
 
@@ -219,16 +219,16 @@ impl DhcpPacket {
 }
 
 pub fn start_client() -> Result<(), &'static str> {
-    let interface = crate::network::NETWORK_INTERFACE
-        .lock()
-        .as_ref()
+    let mut interface_lock = crate::network::NETWORK_INTERFACE.lock();
+    let interface = interface_lock.as_ref()
         .ok_or("Network interface not initialized")?;
 
-    let mac_addr = interface.mac_address().as_bytes();
+    let mac_addr_obj = interface.mac_address();
+    let mac_addr = mac_addr_obj.as_bytes();
     let discover_packet = DhcpPacket::new_discover(mac_addr);
     
     // Create UDP socket for DHCP
-    let mut socket = Socket::new(IpAddress::new([0, 0, 0, 0]))?;
+    let mut socket = Socket::new(SocketType::Dgram)?;
     socket.bind(IpAddress::new([0, 0, 0, 0]), DHCP_CLIENT_PORT)?;
 
     // Send DHCP discover
@@ -237,7 +237,7 @@ pub fn start_client() -> Result<(), &'static str> {
 
     // Implement DHCP state machine
     let mut buf = [0u8; 1500];
-    let (size, addr, port) = socket.recv_from(&mut buf, DHCP_TIMEOUT)?;
+    let (size, _addr, _port) = socket.recv_from(&mut buf, DHCP_TIMEOUT)?;
 
     if let Some(offer) = DhcpPacket::from_bytes(&buf[..size]) {
         // Send DHCP request
@@ -248,11 +248,13 @@ pub fn start_client() -> Result<(), &'static str> {
         socket.send_to(&request.to_bytes(), broadcast_addr, DHCP_SERVER_PORT)?;
 
         // Wait for ACK
-        let (size, addr, port) = socket.recv_from(&mut buf, DHCP_TIMEOUT)?;
+        let (size, _addr, _port) = socket.recv_from(&mut buf, DHCP_TIMEOUT)?;
         if let Some(ack) = DhcpPacket::from_bytes(&buf[..size]) {
             // Configure interface with received IP
-            interface.set_ip_address(ack.yiaddr);
-            return Ok(());
+            if let Some(interface) = &mut *interface_lock {
+                interface.set_ip_address(ack.yiaddr);
+                return Ok(());
+            }
         }
     }
 
