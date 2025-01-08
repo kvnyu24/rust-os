@@ -5,14 +5,21 @@ use x86_64::{
     structures::paging::{
         PageTable, PageTableFlags, PhysFrame, Size4KiB, FrameAllocator,
         Mapper, Page, OffsetPageTable, Translate,
-        mapper::MapToError,
     },
     VirtAddr, PhysAddr,
 };
 use spin::Mutex;
+use alloc::vec::Vec;
+use lazy_static::lazy_static;
 
 const PAGE_SIZE: usize = 4096;
 const PROGRAM_BASE: u64 = 0x400000;
+
+lazy_static! {
+    pub(crate) static ref FRAME_ALLOCATOR: Mutex<Option<BootInfoFrameAllocator>> =
+        Mutex::new(None);
+    pub(crate) static ref FRAME_ALLOCATOR_INITIALIZED: spin::Once<()> = spin::Once::new();
+}
 
 #[derive(Debug)]
 pub struct MemorySpace {
@@ -25,6 +32,7 @@ pub struct MemorySpace {
 
 impl MemorySpace {
     pub fn new() -> Result<Self, &'static str> {
+        ensure_frame_allocator_initialized()?;
         let mut guard = FRAME_ALLOCATOR.lock();
         let frame_allocator = guard.as_mut().unwrap();
         
@@ -48,19 +56,29 @@ impl MemorySpace {
         let frame_allocator = guard.as_mut().unwrap();
         
         let num_pages = (program.len() + PAGE_SIZE - 1) / PAGE_SIZE;
+        let mut allocated_frames = Vec::new();
         
         for i in 0..num_pages {
             let page_addr = VirtAddr::new(PROGRAM_BASE + (i * PAGE_SIZE) as u64);
             let page = Page::<Size4KiB>::containing_address(page_addr);
             let frame = frame_allocator.allocate_frame()
                 .ok_or("Failed to allocate frame for program")?;
+            allocated_frames.push((page, frame.clone()));
             let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
             
             unsafe {
-                self.page_table
-                    .map_to(page, frame.clone(), flags, frame_allocator)
-                    .map_err(|_| "Failed to map page")?
-                    .flush();
+                match self.page_table.map_to(page, frame, flags, frame_allocator) {
+                    Ok(tlb) => tlb.flush(),
+                    Err(err) => {
+                        // Cleanup on error: unmap all previously mapped pages
+                        for (mapped_page, _) in allocated_frames.iter() {
+                            if let Ok((_frame, tlb)) = self.page_table.unmap(*mapped_page) {
+                                tlb.flush();
+                            }
+                        }
+                        return Err("Failed to map page");
+                    }
+                };
 
                 let start = i * PAGE_SIZE;
                 let end = core::cmp::min((i + 1) * PAGE_SIZE, program.len());
@@ -85,6 +103,7 @@ impl MemorySpace {
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
     next: usize,
+    total_frames: Option<usize>,
 }
 
 impl BootInfoFrameAllocator {
@@ -92,6 +111,7 @@ impl BootInfoFrameAllocator {
         BootInfoFrameAllocator {
             memory_map,
             next: 0,
+            total_frames: None,
         }
     }
     
@@ -104,19 +124,44 @@ impl BootInfoFrameAllocator {
         let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
         frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
     }
+
+    fn count_total_frames(&self) -> usize {
+        self.usable_frames().count()
+    }
 }
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        if self.total_frames.is_none() {
+            self.total_frames = Some(self.count_total_frames());
+        }
+        
+        if self.next >= self.total_frames.unwrap() {
+            return None;
+        }
+        
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
         frame
     }
 }
 
-lazy_static::lazy_static! {
-    static ref FRAME_ALLOCATOR: Mutex<Option<BootInfoFrameAllocator>> =
-        Mutex::new(None);
+pub fn init_frame_allocator(memory_map: &'static MemoryMap) {
+    FRAME_ALLOCATOR_INITIALIZED.call_once(|| {
+        let mut allocator = FRAME_ALLOCATOR.lock();
+        if allocator.is_some() {
+            panic!("Frame allocator already initialized");
+        }
+        *allocator = Some(unsafe { BootInfoFrameAllocator::init(memory_map) });
+    });
+}
+
+pub fn ensure_frame_allocator_initialized() -> Result<(), &'static str> {
+    if FRAME_ALLOCATOR_INITIALIZED.r#try().is_some() {
+        Ok(())
+    } else {
+        Err("Frame allocator not initialized")
+    }
 }
 
 pub fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
