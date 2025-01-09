@@ -1,7 +1,8 @@
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec, vec::Vec, collections::BTreeMap};
 use spin::{Mutex, RwLock};
 use lazy_static::lazy_static;
 use x86_64::instructions::interrupts;
+use x86_64::instructions::random::RdRand;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::println;
 
@@ -16,6 +17,7 @@ pub enum TaskState {
     Running,
     Blocked,
     Terminated,
+    Suspended,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +25,31 @@ pub enum TaskPriority {
     Low = 0,
     Normal = 1,
     High = 2,
+}
+
+#[derive(Debug)]
+pub struct TaskStatistics {
+    created_at: u64,
+    total_runtime: u64,
+    context_switches: usize,
+    last_scheduled: Option<u64>,
+}
+
+impl TaskStatistics {
+    fn new() -> Self {
+        Self {
+            created_at: get_current_time(),
+            total_runtime: 0,
+            context_switches: 0,
+            last_scheduled: None,
+        }
+    }
+}
+
+fn get_current_time() -> u64 {
+    // Use CPU cycles as a simple monotonic counter
+    use core::arch::x86_64::_rdtsc;
+    unsafe { _rdtsc() }
 }
 
 #[derive(Debug)]
@@ -35,6 +62,10 @@ pub struct Task {
     tls: Option<Box<[u8]>>,
     quantum: usize,
     time_slice: AtomicUsize,
+    deadline: Option<u64>,
+    group_id: Option<usize>,
+    stats: TaskStatistics,
+    base_priority: TaskPriority,
 }
 
 impl Task {
@@ -59,6 +90,10 @@ impl Task {
             tls: Some(Box::new([0; Self::TLS_SIZE])),
             quantum: Self::DEFAULT_QUANTUM,
             time_slice: AtomicUsize::new(Self::DEFAULT_QUANTUM),
+            deadline: None,
+            group_id: None,
+            stats: TaskStatistics::new(),
+            base_priority: TaskPriority::Normal,
         }
     }
 
@@ -83,11 +118,50 @@ impl Task {
     pub fn decrement_time_slice(&self) -> bool {
         self.time_slice.fetch_sub(1, Ordering::SeqCst) <= 1
     }
+
+    pub fn set_deadline(&mut self, deadline: u64) {
+        self.deadline = Some(deadline);
+    }
+
+    pub fn set_group(&mut self, group_id: usize) {
+        self.group_id = Some(group_id);
+    }
+
+    pub fn boost_priority(&mut self) {
+        if self.priority != TaskPriority::High {
+            self.priority = match self.priority {
+                TaskPriority::Low => TaskPriority::Normal,
+                TaskPriority::Normal => TaskPriority::High,
+                TaskPriority::High => TaskPriority::High,
+            };
+        }
+    }
+
+    pub fn reset_priority(&mut self) {
+        self.priority = self.base_priority;
+    }
+
+    pub fn suspend(&mut self) {
+        if self.state != TaskState::Terminated {
+            self.state = TaskState::Suspended;
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if self.state == TaskState::Suspended {
+            self.state = TaskState::Ready;
+        }
+    }
+
+    pub fn get_stats(&self) -> &TaskStatistics {
+        &self.stats
+    }
 }
 
 pub struct Scheduler {
     tasks: Vec<VecDeque<Arc<RwLock<Task>>>>,
     current: Option<Arc<RwLock<Task>>>,
+    task_groups: BTreeMap<usize, Vec<Arc<RwLock<Task>>>>,
 }
 
 impl Scheduler {
@@ -95,6 +169,7 @@ impl Scheduler {
         Self {
             tasks: vec![VecDeque::new(); 3], // One queue per priority level
             current: None,
+            task_groups: BTreeMap::new(),
         }
     }
 
@@ -107,8 +182,59 @@ impl Scheduler {
         self.tasks[priority as usize].push_back(task);
     }
 
+    pub fn spawn_with_deadline(&mut self, entry_point: fn(), deadline: u64) {
+        let mut task = Task::new(entry_point);
+        task.set_deadline(deadline);
+        let task = Arc::new(RwLock::new(task));
+        self.tasks[TaskPriority::Normal as usize].push_back(task);
+    }
+
+    pub fn spawn_in_group(&mut self, entry_point: fn(), group_id: usize) {
+        let mut task = Task::new(entry_point);
+        task.set_group(group_id);
+        let task = Arc::new(RwLock::new(task));
+        self.task_groups.entry(group_id)
+            .or_insert_with(Vec::new)
+            .push(Arc::clone(&task));
+        self.tasks[TaskPriority::Normal as usize].push_back(task);
+    }
+
+    pub fn suspend_group(&mut self, group_id: usize) {
+        if let Some(tasks) = self.task_groups.get(&group_id) {
+            for task in tasks {
+                task.write().suspend();
+            }
+        }
+    }
+
+    pub fn resume_group(&mut self, group_id: usize) {
+        if let Some(tasks) = self.task_groups.get(&group_id) {
+            for task in tasks {
+                task.write().resume();
+            }
+        }
+    }
+
     pub fn schedule(&mut self) -> Option<Arc<RwLock<Task>>> {
-        // Check if current task's time slice is expired
+        if let Some(ref current) = self.current {
+            let mut task = current.write();
+            if let Some(last_scheduled) = task.stats.last_scheduled {
+                task.stats.total_runtime += get_current_time() - last_scheduled;
+            }
+            task.stats.context_switches += 1;
+        }
+
+        for priority_queue in &mut self.tasks {
+            for task in priority_queue.iter() {
+                let mut task = task.write();
+                if let Some(deadline) = task.deadline {
+                    if get_current_time() > deadline {
+                        task.boost_priority();
+                    }
+                }
+            }
+        }
+
         if let Some(ref current) = self.current {
             let task = current.read();
             if !task.decrement_time_slice() {
@@ -116,20 +242,21 @@ impl Scheduler {
             }
         }
 
-        // Move current task back to ready queue if not terminated
         if let Some(current) = self.current.take() {
             let mut task = current.write();
-            if task.state != TaskState::Terminated {
+            if task.state != TaskState::Terminated && task.state != TaskState::Suspended {
                 task.state = TaskState::Ready;
                 task.reset_time_slice();
                 self.tasks[task.priority as usize].push_back(Arc::clone(&current));
             }
         }
 
-        // Find next task to run (highest priority first)
         for priority in (0..self.tasks.len()).rev() {
             if let Some(task) = self.tasks[priority].pop_front() {
-                task.write().state = TaskState::Running;
+                let mut task_write = task.write();
+                task_write.state = TaskState::Running;
+                task_write.stats.last_scheduled = Some(get_current_time());
+                drop(task_write);
                 self.current = Some(task);
                 return self.current.clone();
             }
@@ -188,4 +315,28 @@ pub fn unblock_task(task: Arc<RwLock<Task>>) {
 
 pub fn init() {
     println!("Task scheduler initialized");
+}
+
+pub fn spawn_with_deadline(entry_point: fn(), deadline: u64) {
+    interrupts::without_interrupts(|| {
+        SCHEDULER.lock().spawn_with_deadline(entry_point, deadline);
+    });
+}
+
+pub fn spawn_in_group(entry_point: fn(), group_id: usize) {
+    interrupts::without_interrupts(|| {
+        SCHEDULER.lock().spawn_in_group(entry_point, group_id);
+    });
+}
+
+pub fn suspend_group(group_id: usize) {
+    interrupts::without_interrupts(|| {
+        SCHEDULER.lock().suspend_group(group_id);
+    });
+}
+
+pub fn resume_group(group_id: usize) {
+    interrupts::without_interrupts(|| {
+        SCHEDULER.lock().resume_group(group_id);
+    });
 } 
